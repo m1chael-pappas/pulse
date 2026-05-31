@@ -160,7 +160,7 @@ func (p *Provider) realQuotaWindows(u *oauthUsage, now time.Time) []providers.Wi
 		return providers.Window{
 			Label:    label,
 			Used:     w.Utilization,
-			Limit:    1,
+			Limit:    100,
 			Unit:     providers.UnitPercent,
 			Start:    start,
 			ResetsAt: reset,
@@ -179,7 +179,7 @@ func (p *Provider) realQuotaWindows(u *oauthUsage, now time.Time) []providers.Wi
 		out = append(out, providers.Window{
 			Label:    "Extra credits",
 			Used:     u.ExtraUsage.Utilization,
-			Limit:    1,
+			Limit:    100,
 			Unit:     providers.UnitPercent,
 			Start:    time.Time{},
 			ResetsAt: monthEnd(now),

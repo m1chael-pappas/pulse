@@ -83,7 +83,7 @@ func windowLines(w providers.Window, inner int) []string {
 	right := resetStyle.Render(countdown(w.ResetsAt))
 
 	first := label + "  " + value
-	if w.Limit > 0 {
+	if w.Limit > 0 && w.Unit != providers.UnitPercent {
 		first += labelStyle.Render(fmt.Sprintf(" / %s", formatValue(w.Unit, w.Limit)))
 	}
 	gap := inner - lipgloss.Width(first) - lipgloss.Width(right)
@@ -102,7 +102,7 @@ func formatValue(u providers.Unit, v float64) string {
 	case providers.UnitTokens:
 		return humanTokens(int64(v))
 	case providers.UnitPercent:
-		return fmt.Sprintf("%.0f%%", v*100)
+		return fmt.Sprintf("%.0f%%", v)
 	default:
 		return fmt.Sprintf("%.0f", v)
 	}

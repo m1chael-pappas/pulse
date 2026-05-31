@@ -23,7 +23,7 @@ type Unit string
 const (
 	UnitTokens  Unit = "tok"
 	UnitUSD     Unit = "USD"
-	UnitPercent Unit = "%" // value held as 0.0-1.0
+	UnitPercent Unit = "%" // value held as 0-100 (already a percentage)
 )
 
 // Window describes a single quota / counter for a provider.
