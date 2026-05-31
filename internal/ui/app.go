@@ -1,96 +1,177 @@
 package ui
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/michaelpappas/pulse/internal/ui/panels"
+	"github.com/michaelpappas/pulse/internal/config"
+	"github.com/michaelpappas/pulse/internal/providers"
+	"github.com/michaelpappas/pulse/internal/providers/claudecode"
+	"github.com/michaelpappas/pulse/internal/ui/tile"
 )
 
 type App struct {
 	width, height int
 	focus         int
-	panels        []panels.Panel
+	providers     []providers.Provider
+	snapshots     []providers.Snapshot
 }
 
-func NewApp() App {
+func NewApp(cfg config.Config) App {
+	cc := claudecode.FromConfig(
+		cfg.ClaudeCode.Note,
+		cfg.ClaudeCode.SessionBudget,
+		cfg.ClaudeCode.DailyBudget,
+		cfg.ClaudeCode.MonthBudget,
+	)
+	provs := []providers.Provider{cc}
 	return App{
-		panels: []panels.Panel{
-			panels.NewCost(),
-			panels.NewCalendar(),
-			panels.NewUsage(),
-			panels.NewActivity(),
-		},
+		providers: provs,
+		snapshots: make([]providers.Snapshot, len(provs)),
 	}
 }
+
+type refreshMsg struct {
+	idx  int
+	snap providers.Snapshot
+}
+
+type tickMsg struct {
+	idx int
+}
+
+type clockMsg time.Time
 
 func (a App) Init() tea.Cmd {
-	cmds := make([]tea.Cmd, 0, len(a.panels))
-	for _, p := range a.panels {
-		cmds = append(cmds, p.Init())
+	cmds := make([]tea.Cmd, 0, len(a.providers)*2+1)
+	for i := range a.providers {
+		cmds = append(cmds, a.refresh(i))
+		cmds = append(cmds, a.tick(i))
 	}
+	cmds = append(cmds, clockTick())
 	return tea.Batch(cmds...)
+}
+
+func (a App) refresh(i int) tea.Cmd {
+	p := a.providers[i]
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		return refreshMsg{idx: i, snap: p.Refresh(ctx)}
+	}
+}
+
+func (a App) tick(i int) tea.Cmd {
+	p := a.providers[i]
+	return tea.Tick(p.Interval(), func(time.Time) tea.Msg {
+		return tickMsg{idx: i}
+	})
+}
+
+func clockTick() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return clockMsg(t) })
 }
 
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.width, a.height = msg.Width, msg.Height
+		return a, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return a, tea.Quit
+		case "r":
+			cmds := make([]tea.Cmd, len(a.providers))
+			for i := range a.providers {
+				cmds[i] = a.refresh(i)
+			}
+			return a, tea.Batch(cmds...)
 		case "tab":
-			a.focus = (a.focus + 1) % len(a.panels)
+			if len(a.providers) > 0 {
+				a.focus = (a.focus + 1) % len(a.providers)
+			}
 			return a, nil
 		case "shift+tab":
-			a.focus = (a.focus - 1 + len(a.panels)) % len(a.panels)
+			if len(a.providers) > 0 {
+				a.focus = (a.focus - 1 + len(a.providers)) % len(a.providers)
+			}
 			return a, nil
 		}
-	}
 
-	cmds := make([]tea.Cmd, 0, len(a.panels))
-	for i, p := range a.panels {
-		updated, cmd := p.Update(msg)
-		a.panels[i] = updated
-		cmds = append(cmds, cmd)
+	case refreshMsg:
+		if msg.idx < len(a.snapshots) {
+			a.snapshots[msg.idx] = msg.snap
+		}
+		return a, nil
+
+	case tickMsg:
+		return a, tea.Batch(a.refresh(msg.idx), a.tick(msg.idx))
+
+	case clockMsg:
+		return a, clockTick()
 	}
-	return a, tea.Batch(cmds...)
+	return a, nil
 }
 
 func (a App) View() string {
-	if a.width == 0 {
+	if a.width == 0 || a.height == 0 {
 		return "loading pulse…"
 	}
 
-	cellW := a.width/2 - 2
-	cellH := (a.height-2)/2 - 1
+	const cols = 2
+	const helpRows = 2
+	rows := (len(a.providers) + cols - 1) / cols
+	if rows < 1 {
+		rows = 1
+	}
+	gap := 1
+	tileW := (a.width - gap*(cols-1)) / cols
+	tileH := (a.height - helpRows) / rows
+	if tileW < 24 {
+		tileW = 24
+	}
+	if tileH < 8 {
+		tileH = 8
+	}
+	contentW := tileW - 4 // border + padding
+	contentH := tileH - 2
 
-	cell := func(i int) string {
-		style := panelStyle.Width(cellW).Height(cellH)
-		if i == a.focus {
-			style = style.BorderForeground(lipgloss.Color("205"))
+	tiles := make([]string, len(a.providers))
+	for i, snap := range a.snapshots {
+		if snap.Name == "" {
+			snap = providers.Snapshot{
+				Name:   a.providers[i].Name(),
+				Status: providers.StatusUnknown,
+				Note:   "loading…",
+			}
 		}
-		return style.Render(a.panels[i].View())
+		tiles[i] = tile.Render(snap, contentW, contentH, i == a.focus)
 	}
 
-	top := lipgloss.JoinHorizontal(lipgloss.Top, cell(0), cell(1))
-	bot := lipgloss.JoinHorizontal(lipgloss.Top, cell(2), cell(3))
-	grid := lipgloss.JoinVertical(lipgloss.Left, top, bot)
+	var rowsView []string
+	for r := 0; r < rows; r++ {
+		start := r * cols
+		end := start + cols
+		if end > len(tiles) {
+			end = len(tiles)
+		}
+		rowsView = append(rowsView, lipgloss.JoinHorizontal(lipgloss.Top, tiles[start:end]...))
+	}
+	grid := lipgloss.JoinVertical(lipgloss.Left, rowsView...)
 
-	help := helpStyle.Render(fmt.Sprintf("tab: focus  q: quit  •  panel %d/%d", a.focus+1, len(a.panels)))
+	help := helpStyle.Render(fmt.Sprintf(
+		"tab: focus  r: refresh  q: quit  •  %s",
+		time.Now().Format("Mon 15:04:05"),
+	))
 	return lipgloss.JoinVertical(lipgloss.Left, grid, help)
 }
 
-var (
-	panelStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("240")).
-			Padding(0, 1)
-
-	helpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
-			MarginTop(1)
-)
+var helpStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("241")).
+	MarginTop(1)
