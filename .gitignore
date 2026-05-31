@@ -1,0 +1,7 @@
+bin/
+dist/
+pulse
+*.test
+*.out
+.env
+.env.local
