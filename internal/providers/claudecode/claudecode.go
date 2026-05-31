@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -95,7 +96,6 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	note := ""
 	switch p.NoteMode {
 	case NoteModeOff:
-		// leave empty
 	case NoteModeProject:
 		note = agg.lastProject
 	default:
@@ -115,21 +115,138 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 			acct.EmailAddress, subtitle)
 	}
 
+	// Try to enrich with real plan limits from the OAuth usage endpoint.
+	usage, oauthErr := p.fetchUsage(ctx, acct)
+	windows := p.localCostWindows(agg, sessionStart, sessionReset, dayStart, dayReset, monthStart, monthReset)
+	if usage != nil {
+		windows = p.realQuotaWindows(usage, now)
+		subtitle = fmt.Sprintf("Live plan limits via api.anthropic.com · logged in as %s", acct.EmailAddress)
+	} else if oauthErr != nil {
+		subtitle += " · " + oauthHint(oauthErr)
+	}
+
 	return providers.Snapshot{
-		Name:     name,
-		Status:   providers.StatusOK,
-		Subtitle: subtitle,
-		Header:   header,
-		CostUSD:  agg.costToday,
-		Windows: []providers.Window{
-			{Label: "5h session", Used: agg.sessionCost, Limit: p.SessionBudget, Unit: providers.UnitUSD, Start: sessionStart, ResetsAt: sessionReset},
-			{Label: "Today", Used: agg.costToday, Limit: p.DailyBudget, Unit: providers.UnitUSD, Start: dayStart, ResetsAt: dayReset},
-			{Label: "Month", Used: agg.costMonth, Limit: p.MonthBudget, Unit: providers.UnitUSD, Start: monthStart, ResetsAt: monthReset},
-		},
+		Name:      name,
+		Status:    statusFromOAuthErr(oauthErr),
+		Subtitle:  subtitle,
+		Header:    header,
+		CostUSD:   agg.costToday,
+		Windows:   windows,
 		Breakdown: buildBreakdown(agg),
 		History:   buildHistory(agg, now),
 		Stats:     buildStats(agg),
 		Note:      note,
+	}
+}
+
+func (p *Provider) localCostWindows(agg aggregate, sessionStart, sessionReset, dayStart, dayReset, monthStart, monthReset time.Time) []providers.Window {
+	return []providers.Window{
+		{Label: "5h session", Used: agg.sessionCost, Limit: p.SessionBudget, Unit: providers.UnitUSD, Start: sessionStart, ResetsAt: sessionReset},
+		{Label: "Today", Used: agg.costToday, Limit: p.DailyBudget, Unit: providers.UnitUSD, Start: dayStart, ResetsAt: dayReset},
+		{Label: "Month", Used: agg.costMonth, Limit: p.MonthBudget, Unit: providers.UnitUSD, Start: monthStart, ResetsAt: monthReset},
+	}
+}
+
+func (p *Provider) realQuotaWindows(u *oauthUsage, now time.Time) []providers.Window {
+	mk := func(label string, w *oauthWindow, fallbackHours float64) providers.Window {
+		if w == nil {
+			return providers.Window{Label: label}
+		}
+		reset := w.Reset()
+		start := time.Time{}
+		if !reset.IsZero() && fallbackHours > 0 {
+			start = reset.Add(-time.Duration(fallbackHours) * time.Hour)
+		}
+		return providers.Window{
+			Label:    label,
+			Used:     w.Utilization,
+			Limit:    1,
+			Unit:     providers.UnitPercent,
+			Start:    start,
+			ResetsAt: reset,
+		}
+	}
+	out := []providers.Window{
+		mk("5h session", u.FiveHour, 5),
+		mk("Weekly", u.SevenDay, 24*7),
+		mk("Weekly Opus", u.SevenDayOpus, 24*7),
+		mk("Weekly Sonnet", u.SevenDaySonnet, 24*7),
+	}
+	if u.SevenDayRoutines != nil {
+		out = append(out, mk("Routines", u.SevenDayRoutines, 24*7))
+	}
+	if u.ExtraUsage != nil && u.ExtraUsage.IsEnabled {
+		out = append(out, providers.Window{
+			Label:    "Extra credits",
+			Used:     u.ExtraUsage.Utilization,
+			Limit:    1,
+			Unit:     providers.UnitPercent,
+			Start:    time.Time{},
+			ResetsAt: monthEnd(now),
+		})
+	}
+	// Drop placeholders for windows the response omitted (label only, no reset).
+	filtered := out[:0]
+	for _, w := range out {
+		if w.ResetsAt.IsZero() && w.Used == 0 {
+			continue
+		}
+		filtered = append(filtered, w)
+	}
+	return filtered
+}
+
+func monthEnd(now time.Time) time.Time {
+	return time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
+}
+
+func (p *Provider) fetchUsage(ctx context.Context, acct Account) (*oauthUsage, error) {
+	blob, err := readKeychainCredential(ctx, acct.EmailAddress)
+	if err != nil {
+		// Retry without account scoping — login order or older builds may
+		// have stored under a non-email account name.
+		blob, err = readKeychainCredential(ctx, "")
+		if err != nil {
+			return nil, err
+		}
+	}
+	cred, err := parseOAuthCredential(blob)
+	if err != nil {
+		return nil, err
+	}
+	if cred.Expired() {
+		return nil, errOAuthUnauthorized
+	}
+	return fetchOAuthUsage(ctx, cred.AccessToken)
+}
+
+func oauthHint(err error) string {
+	switch {
+	case errors.Is(err, ErrKeychainUnavailable):
+		return "no Keychain access (non-macOS?)"
+	case errors.Is(err, ErrKeychainNotFound):
+		return "not logged in — run `claude` to authenticate"
+	case errors.Is(err, ErrKeychainDenied):
+		return "Keychain prompt denied — re-run and pick Always Allow"
+	case errors.Is(err, errOAuthUnauthorized):
+		return "token expired — run `claude login`"
+	case errors.Is(err, errOAuthRateLimited):
+		return "rate-limited (429) — backing off"
+	default:
+		return "plan-limits API failed: " + err.Error()
+	}
+}
+
+func statusFromOAuthErr(err error) providers.Status {
+	switch {
+	case err == nil:
+		return providers.StatusOK
+	case errors.Is(err, errOAuthUnauthorized), errors.Is(err, ErrKeychainDenied):
+		return providers.StatusWarn
+	case errors.Is(err, errOAuthRateLimited):
+		return providers.StatusWarn
+	default:
+		return providers.StatusUnknown
 	}
 }
 

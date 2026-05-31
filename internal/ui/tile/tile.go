@@ -101,6 +101,8 @@ func formatValue(u providers.Unit, v float64) string {
 		return fmt.Sprintf("$%.2f", v)
 	case providers.UnitTokens:
 		return humanTokens(int64(v))
+	case providers.UnitPercent:
+		return fmt.Sprintf("%.0f%%", v*100)
 	default:
 		return fmt.Sprintf("%.0f", v)
 	}
