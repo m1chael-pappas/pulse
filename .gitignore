@@ -1,6 +1,7 @@
 bin/
 dist/
-pulse
+# Compiled binary at the repo root (only — must not match cmd/pulse/).
+/pulse
 *.test
 *.out
 .env

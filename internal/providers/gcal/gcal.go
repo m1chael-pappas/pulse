@@ -22,7 +22,7 @@ import (
 
 	ics "github.com/arran4/golang-ical"
 
-	"github.com/michaelpappas/pulse/internal/providers"
+	"github.com/m1chael-pappas/pulse/internal/providers"
 )
 
 const (
@@ -103,7 +103,7 @@ func fetchAndParse(ctx context.Context, url string) (*ics.Calendar, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "pulse/0.1 (+https://github.com/michaelpappas/pulse)")
+	req.Header.Set("User-Agent", "pulse/0.1 (+https://github.com/m1chael-pappas/pulse)")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

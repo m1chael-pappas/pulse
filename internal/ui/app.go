@@ -9,15 +9,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/michaelpappas/pulse/internal/config"
-	"github.com/michaelpappas/pulse/internal/providers"
-	"github.com/michaelpappas/pulse/internal/providers/claudecode"
-	"github.com/michaelpappas/pulse/internal/providers/claudestatus"
-	"github.com/michaelpappas/pulse/internal/providers/gcal"
-	"github.com/michaelpappas/pulse/internal/providers/github"
-	"github.com/michaelpappas/pulse/internal/providers/maccal"
-	"github.com/michaelpappas/pulse/internal/providers/system"
-	"github.com/michaelpappas/pulse/internal/ui/tile"
+	"github.com/m1chael-pappas/pulse/internal/config"
+	"github.com/m1chael-pappas/pulse/internal/providers"
+	"github.com/m1chael-pappas/pulse/internal/providers/claudecode"
+	"github.com/m1chael-pappas/pulse/internal/providers/claudestatus"
+	"github.com/m1chael-pappas/pulse/internal/providers/gcal"
+	"github.com/m1chael-pappas/pulse/internal/providers/github"
+	"github.com/m1chael-pappas/pulse/internal/providers/maccal"
+	"github.com/m1chael-pappas/pulse/internal/providers/system"
+	"github.com/m1chael-pappas/pulse/internal/ui/tile"
 )
 
 type App struct {

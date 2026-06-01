@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/michaelpappas/pulse/internal/providers"
+	"github.com/m1chael-pappas/pulse/internal/providers"
 )
 
 // NoteMode controls what the tile shows in the footer "note" line.

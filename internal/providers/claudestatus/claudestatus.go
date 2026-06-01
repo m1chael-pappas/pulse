@@ -19,7 +19,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/michaelpappas/pulse/internal/providers"
+	"github.com/m1chael-pappas/pulse/internal/providers"
 )
 
 const summaryURL = "https://status.claude.com/api/v2/summary.json"

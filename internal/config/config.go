@@ -168,7 +168,11 @@ func writeDefault(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(defaultTemplate), 0o644)
+	// 0600 keeps the file user-only readable. The config can hold the
+	// gcal.ics_url secret (a Google "secret address in iCal format" is
+	// a credential that grants read access to the user's calendar to
+	// anyone who has the URL), so we never want it world-readable.
+	return os.WriteFile(path, []byte(defaultTemplate), 0o600)
 }
 
 const defaultTemplate = `# pulse config — auto-generated on first run.

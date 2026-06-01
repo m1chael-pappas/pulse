@@ -1,4 +1,4 @@
-module github.com/michaelpappas/pulse
+module github.com/m1chael-pappas/pulse
 
 go 1.24.0
 

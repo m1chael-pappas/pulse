@@ -16,7 +16,7 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/sensors"
 
-	"github.com/michaelpappas/pulse/internal/providers"
+	"github.com/m1chael-pappas/pulse/internal/providers"
 )
 
 type Provider struct {

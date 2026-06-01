@@ -6,20 +6,31 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) + [Lip Gloss
 
 ## Install
 
+### Quickest — one command
+
 ```bash
-brew install go             # if you don't have Go
-git clone https://github.com/michaelpappas/pulse.git
-cd pulse
-make install                # → ~/go/bin/pulse, plus a PATH hint if needed
-pulse doctor                # verify setup
+go install github.com/m1chael-pappas/pulse/cmd/pulse@latest
 ```
 
-If `pulse: command not found` after install, add Go's bin dir to your PATH once:
+No clone, no build step. Requires Go 1.24+ (`brew install go`).
+
+### From source
+
+```bash
+git clone https://github.com/m1chael-pappas/pulse.git
+cd pulse
+make install         # → ~/go/bin/pulse, plus a PATH hint if needed
+pulse doctor         # verify setup
+```
+
+If `pulse: command not found` after either install, add Go's bin dir to your PATH once:
 
 ```bash
 echo 'export PATH="$HOME/go/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
+
+To upgrade later, re-run the same `go install` command (or `git pull && make install` if you cloned).
 
 ## Development
 
@@ -98,6 +109,7 @@ internal/
   ui/                       Bubble Tea root model + grid layout
     tile/                   shared tile renderer
   providers/                pluggable data feeds
-    claudecode/  system/  github/  maccal/  gcal/
+    claudecode/  claudestatus/  system/  github/  maccal/  gcal/
   config/                   config.toml loader (~/.config/pulse/)
+  doctor/                   pulse doctor health checks
 ```
