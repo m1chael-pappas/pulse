@@ -33,11 +33,11 @@ func NewApp(cfg config.Config) App {
 		cfg.ClaudeCode.MonthBudget,
 	)
 	provs := []providers.Provider{cc, system.New()}
-	if cfg.GitHub.Enabled {
+	if cfg.GitHub.IsEnabled() {
 		provs = append(provs, github.New(cfg.GitHub.Limit))
 	}
 	switch {
-	case cfg.MacCal.Enabled:
+	case cfg.MacCal.IsEnabled():
 		provs = append(provs, maccal.New(cfg.MacCal.Calendars, cfg.MacCal.Lookahead, cfg.MacCal.LookaheadDays))
 	case cfg.GCal.ICSURL != "":
 		provs = append(provs, gcal.New(cfg.GCal.ICSURL, cfg.GCal.Lookahead, cfg.GCal.LookaheadDays))

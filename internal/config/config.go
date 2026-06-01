@@ -28,11 +28,21 @@ type Config struct {
 	GitHub     GitHubConfig     `toml:"github"`
 }
 
-// GitHubConfig configures the GitHub PR tile. Uses the `gh` CLI's auth
-// so no token belongs here.
+// GitHubConfig configures the GitHub PR tile. Uses the gh CLI's auth
+// so no token belongs here. Enabled is a pointer so we can distinguish
+// "not set in config" (default → on) from "explicitly off".
 type GitHubConfig struct {
-	Enabled bool `toml:"enabled"`
-	Limit   int  `toml:"limit"`
+	Enabled *bool `toml:"enabled"`
+	Limit   int   `toml:"limit"`
+}
+
+// IsEnabled returns whether the tile should appear. Missing key = on,
+// explicit false = off.
+func (g GitHubConfig) IsEnabled() bool {
+	if g.Enabled == nil {
+		return true
+	}
+	return *g.Enabled
 }
 
 // MacCalConfig configures the macOS Calendar.app provider. Works with any
@@ -40,7 +50,8 @@ type GitHubConfig struct {
 // First run triggers a TCC permission prompt; after Allow it's silent.
 type MacCalConfig struct {
 	// Enabled toggles the tile. macOS-only — silently ignored elsewhere.
-	Enabled bool `toml:"enabled"`
+	// Pointer so "not set" defaults to enabled; explicit false turns it off.
+	Enabled *bool `toml:"enabled"`
 
 	// Calendars restricts to specific calendar names. Empty = all visible.
 	Calendars []string `toml:"calendars"`
@@ -48,6 +59,14 @@ type MacCalConfig struct {
 	// Lookahead caps event count and time window.
 	Lookahead     int `toml:"lookahead"`
 	LookaheadDays int `toml:"lookahead_days"`
+}
+
+// IsEnabled returns whether the maccal tile should appear.
+func (m MacCalConfig) IsEnabled() bool {
+	if m.Enabled == nil {
+		return true
+	}
+	return *m.Enabled
 }
 
 // GCalConfig configures the Google Calendar provider via a public iCal
