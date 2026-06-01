@@ -24,6 +24,22 @@ import (
 type Config struct {
 	ClaudeCode ClaudeCodeConfig `toml:"claudecode"`
 	GCal       GCalConfig       `toml:"gcal"`
+	MacCal     MacCalConfig     `toml:"maccal"`
+}
+
+// MacCalConfig configures the macOS Calendar.app provider. Works with any
+// account already synced into Calendar.app (Google, iCloud, Exchange).
+// First run triggers a TCC permission prompt; after Allow it's silent.
+type MacCalConfig struct {
+	// Enabled toggles the tile. macOS-only — silently ignored elsewhere.
+	Enabled bool `toml:"enabled"`
+
+	// Calendars restricts to specific calendar names. Empty = all visible.
+	Calendars []string `toml:"calendars"`
+
+	// Lookahead caps event count and time window.
+	Lookahead     int `toml:"lookahead"`
+	LookaheadDays int `toml:"lookahead_days"`
 }
 
 // GCalConfig configures the Google Calendar provider via a public iCal
@@ -118,13 +134,21 @@ session_budget = 0
 daily_budget   = 0
 month_budget   = 0
 
+[maccal]
+# Read upcoming events from macOS Calendar.app. Works with any account
+# Calendar.app is already syncing (Google via System Settings → Internet
+# Accounts, iCloud, Exchange). First run pops a one-time permission
+# prompt — click Allow once and it's silent forever.
+enabled        = true
+calendars      = []   # empty = every visible calendar; or e.g. ["Work", "Home"]
+lookahead      = 6
+lookahead_days = 7
+
 [gcal]
-# Google Calendar → Settings → pick a calendar → "Integrate calendar" →
-# copy "Secret address in iCal format". Paste it below to enable the
-# upcoming-events tile. Leave empty to disable the tile entirely.
-#
-# Anyone with this URL can read your events — don't share it.
+# Fallback for non-macOS hosts: a Google Calendar "Secret address in iCal
+# format". Most work calendars disable this surface — prefer [maccal] on
+# a Mac. Anyone with this URL can read your events.
 ics_url        = ""
-lookahead      = 6   # max events to show
-lookahead_days = 7   # cut off events beyond this many days out
+lookahead      = 6
+lookahead_days = 7
 `

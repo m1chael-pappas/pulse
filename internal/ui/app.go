@@ -12,6 +12,7 @@ import (
 	"github.com/michaelpappas/pulse/internal/providers"
 	"github.com/michaelpappas/pulse/internal/providers/claudecode"
 	"github.com/michaelpappas/pulse/internal/providers/gcal"
+	"github.com/michaelpappas/pulse/internal/providers/maccal"
 	"github.com/michaelpappas/pulse/internal/providers/system"
 	"github.com/michaelpappas/pulse/internal/ui/tile"
 )
@@ -31,7 +32,10 @@ func NewApp(cfg config.Config) App {
 		cfg.ClaudeCode.MonthBudget,
 	)
 	provs := []providers.Provider{cc, system.New()}
-	if cfg.GCal.ICSURL != "" {
+	switch {
+	case cfg.MacCal.Enabled:
+		provs = append(provs, maccal.New(cfg.MacCal.Calendars, cfg.MacCal.Lookahead, cfg.MacCal.LookaheadDays))
+	case cfg.GCal.ICSURL != "":
 		provs = append(provs, gcal.New(cfg.GCal.ICSURL, cfg.GCal.Lookahead, cfg.GCal.LookaheadDays))
 	}
 	return App{
