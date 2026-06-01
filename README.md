@@ -101,6 +101,10 @@ pulse usage           # one-shot fetch of Claude OAuth usage (raw JSON)
 pulse --help          # this help
 ```
 
+## License
+
+[MIT](./LICENSE) © Michael Pappas. PRs welcome.
+
 ## Layout
 
 ```
