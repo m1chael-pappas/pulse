@@ -110,31 +110,40 @@ func Path() (string, error) {
 	return filepath.Join(dir, "pulse", "config.toml"), nil
 }
 
+// LoadResult holds everything the loader can communicate to its caller.
+type LoadResult struct {
+	Config     Config
+	Path       string
+	FirstRun   bool // true when the loader had to create the config file
+}
+
 // Load reads the config file. On first run (file missing) it writes the
-// default template and returns the zero-value Config. Caller should not
-// treat first-run as an error.
-func Load() (Config, string, error) {
+// default template and returns the zero-value Config plus FirstRun=true
+// so the caller can print a setup banner. Missing file is not an error.
+func Load() (LoadResult, error) {
+	out := LoadResult{}
 	path, err := Path()
 	if err != nil {
-		return Config{}, "", err
+		return out, err
 	}
+	out.Path = path
 
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		if writeErr := writeDefault(path); writeErr != nil {
-			return Config{}, path, fmt.Errorf("write default config: %w", writeErr)
+			return out, fmt.Errorf("write default config: %w", writeErr)
 		}
-		return Config{}, path, nil
+		out.FirstRun = true
+		return out, nil
 	}
 	if err != nil {
-		return Config{}, path, err
+		return out, err
 	}
 
-	var cfg Config
-	if _, err := toml.Decode(string(b), &cfg); err != nil {
-		return Config{}, path, fmt.Errorf("parse %s: %w", path, err)
+	if _, err := toml.Decode(string(b), &out.Config); err != nil {
+		return out, fmt.Errorf("parse %s: %w", path, err)
 	}
-	return cfg, path, nil
+	return out, nil
 }
 
 func writeDefault(path string) error {

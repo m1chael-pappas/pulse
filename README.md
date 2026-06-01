@@ -1,55 +1,98 @@
 # pulse
 
-A terminal dashboard for your dev day. Pluggable data sources — start with AI usage/cost, calendar, and recent activity; extend to anything (GitHub, Linear, deploys, Slack digests…).
+A terminal dashboard for your dev day. One tile per data source — Claude Code usage, system stats, GitHub PRs, your calendar — refreshing live.
 
 Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) + [Lip Gloss](https://github.com/charmbracelet/lipgloss).
 
-## Run
+## Install
 
 ```bash
 brew install go            # if you don't have Go
-go mod tidy
-go run ./cmd/pulse
+git clone https://github.com/michaelpappas/pulse.git
+cd pulse
+go install ./cmd/pulse
 ```
 
-Keys: `tab` / `shift+tab` cycle panels, `q` or `ctrl+c` quits.
+`go install` puts the binary at `$(go env GOPATH)/bin/pulse` — usually `~/go/bin/pulse`. **That directory may not be on your `PATH`.** Check and fix once:
+
+```bash
+# Add ~/go/bin to PATH if it isn't already
+echo 'export PATH="$HOME/go/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Then `pulse` runs from anywhere. To verify:
+
+```bash
+pulse doctor          # checks PATH, deps, and config
+```
+
+## First run
+
+```bash
+pulse
+```
+
+First launch writes a default config to your OS config dir (`~/Library/Application Support/pulse/` on macOS, `~/.config/pulse/` on Linux). You can find it with:
+
+```bash
+pulse config          # prints the path
+```
+
+Keys inside the TUI: `tab` / `shift+tab` cycles focus, `r` refreshes, `q` quits.
+
+## What you get out of the box
+
+| Tile | Data source | Auth |
+|---|---|---|
+| **Claude** | `~/.claude/projects/*.jsonl` + `api.anthropic.com/api/oauth/usage` | macOS Keychain (Claude CLI) |
+| **System** | CPU / memory / disk / load via gopsutil | none |
+| **GitHub** | Open PRs (yours + review queue) via `gh` CLI | `gh auth login` |
+| **Calendar** | macOS Calendar.app via `icalBuddy` | macOS Calendar permission |
+
+Optional dependencies (install only what you want to use):
+
+```bash
+brew install gh ical-buddy
+```
 
 ## Adding a data source
 
-Every feed implements `internal/sources.Source`:
+Every feed implements `providers.Provider`:
 
 ```go
-type Source interface {
+type Provider interface {
     Name() string
-    Refresh(ctx context.Context) (Snapshot, error)
+    Refresh(ctx context.Context) Snapshot
     Interval() time.Duration
+    PreferredWidth() int
 }
 ```
 
-1. Create `internal/sources/<name>/` with a type that implements the interface.
-2. Add a panel under `internal/ui/panels/` that renders its `Snapshot`.
-3. Wire it into `ui.NewApp` in `internal/ui/app.go`.
+1. Create `internal/providers/<name>/` with a type that implements the interface.
+2. Wire it into `ui.NewApp` in `internal/ui/app.go`.
+3. Add a config struct to `internal/config/config.go` if it needs settings.
 
-## Roadmap
+Snapshots are rendered by the shared tile renderer in `internal/ui/tile/`, so you don't write any UI code — just populate the fields (Windows, Sections, Stats, Events, History, Breakdown) and the tile draws them.
 
-- [ ] Anthropic Admin API (usage + cost reports)
-- [ ] Claude Code session parser (`~/.claude/projects/**/*.jsonl`)
-- [ ] Google Calendar (OAuth loopback flow)
-- [ ] OpenAI usage
-- [ ] GitHub PR / CI status
-- [ ] Linear / Jira tickets
-- [ ] Cross-platform release via [goreleaser](https://goreleaser.com/)
-- [ ] Homebrew tap for one-line install
+## Subcommands
+
+```bash
+pulse                 # run the TUI
+pulse config          # print the config file path
+pulse doctor          # check PATH, deps, calendar/keychain access
+pulse usage           # one-shot fetch of Claude OAuth usage (raw JSON)
+pulse --help          # this help
+```
 
 ## Layout
 
 ```
-cmd/pulse/                entrypoint
+cmd/pulse/                  entrypoint
 internal/
-  ui/                     Bubble Tea root model
-    panels/               one model per grid cell
-  sources/                pluggable data feeds
-    anthropic/  claudecode/  gcal/
-  config/                 ~/.config/pulse/config.toml
-  cache/                  local offline cache
+  ui/                       Bubble Tea root model + grid layout
+    tile/                   shared tile renderer
+  providers/                pluggable data feeds
+    claudecode/  system/  github/  maccal/  gcal/
+  config/                   config.toml loader (~/.config/pulse/)
 ```
