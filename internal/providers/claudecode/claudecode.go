@@ -32,6 +32,14 @@ type Provider struct {
 	MonthBudget   float64
 	// NoteMode controls footer privacy. Default shows last prompt.
 	NoteMode NoteMode
+
+	// Cached last-known-good OAuth usage. When the live fetch fails
+	// transiently (429 rate-limit, network blip, brief 401 during token
+	// refresh) we keep showing this so the tile doesn't flip between the
+	// "real plan limits" view and the "local cost estimate" view every
+	// few minutes. Cleared on account switch.
+	cachedUsage  *oauthUsage
+	cachedUsedAt time.Time
 }
 
 func New() *Provider { return &Provider{} }
@@ -59,9 +67,19 @@ func parseNoteMode(s string) NoteMode {
 	}
 }
 
-func (p *Provider) Name() string             { return "Claude Code" }
-func (p *Provider) Interval() time.Duration  { return 30 * time.Second }
-func (p *Provider) PreferredWidth() int      { return 64 }
+func (p *Provider) Name() string            { return "Claude Code" }
+func (p *Provider) Interval() time.Duration { return 30 * time.Second }
+
+// PreferredWidth is the minimum useful width for this tile. The App
+// expands the Claude tile to the full terminal width via Hero() below
+// when there's room — this value is the fallback for narrow terminals.
+func (p *Provider) PreferredWidth() int { return 72 }
+
+// Hero marks this provider as the dashboard's primary tile. The renderer
+// always promotes it to the full terminal width and gives it its own
+// row, so secondary tiles (system, status, github, calendar) pack
+// symmetrically beneath it regardless of terminal size.
+func (p *Provider) Hero() bool { return true }
 
 func (p *Provider) root() string {
 	if p.Root != "" {
@@ -84,6 +102,10 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	acct, _ := readAccount()
 	if changed, _ := recordAccountIfChanged(acct); changed {
 		oauthRateGate.clear()
+		// Different account → different quotas. Drop the cache so we
+		// don't briefly mis-attribute one account's usage to another.
+		p.cachedUsage = nil
+		p.cachedUsedAt = time.Time{}
 	}
 
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
@@ -120,16 +142,36 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	}
 
 	// Try to enrich with real plan limits from the OAuth usage endpoint.
+	// On transient failures (429 rate-limit, brief network errors) we
+	// keep using the most recent successful response so the tile holds
+	// its layout instead of flipping back to the local-cost fallback.
+	// The cache is dropped after 30 minutes — long enough to ride out
+	// Anthropic's 5-minute rate-limit windows, short enough that genuine
+	// auth/permission problems still surface.
 	usage, oauthErr := p.fetchUsage(ctx, acct)
-	windows := p.localCostWindows(agg, sessionStart, sessionReset, dayStart, dayReset, monthStart, monthReset)
-	const tokenEquivNote = "Token-equivalent — Max/Enterprise plans bill flat-rate"
 	if usage != nil {
+		p.cachedUsage = usage
+		p.cachedUsedAt = now
+	}
+	const tokenEquivNote = "Token-equivalent — Max/Enterprise plans bill flat-rate"
+	const cacheMaxAge = 30 * time.Minute
+
+	var windows []providers.Window
+	switch {
+	case usage != nil:
 		windows = p.realQuotaWindows(usage, now)
 		subtitle = tokenEquivNote
-	} else if oauthErr != nil {
-		subtitle = tokenEquivNote + " · " + oauthHint(oauthErr)
-	} else {
-		subtitle = tokenEquivNote
+	case p.cachedUsage != nil && now.Sub(p.cachedUsedAt) < cacheMaxAge:
+		windows = p.realQuotaWindows(p.cachedUsage, now)
+		age := now.Sub(p.cachedUsedAt).Round(time.Second)
+		subtitle = fmt.Sprintf("%s · cached %s ago (%s)", tokenEquivNote, age, oauthHint(oauthErr))
+	default:
+		windows = p.localCostWindows(agg, sessionStart, sessionReset, dayStart, dayReset, monthStart, monthReset)
+		if oauthErr != nil {
+			subtitle = tokenEquivNote + " · " + oauthHint(oauthErr)
+		} else {
+			subtitle = tokenEquivNote
+		}
 	}
 
 	return providers.Snapshot{
@@ -182,7 +224,7 @@ func (p *Provider) maxPlanWindows(u *oauthUsage, now time.Time) []providers.Wind
 		mkPercent("Weekly", u.SevenDay, time.Time{}, 24*7),
 		mkPercent("Weekly Opus", u.SevenDayOpus, weeklyReset, 24*7),
 		mkPercent("Weekly Sonnet", u.SevenDaySonnet, weeklyReset, 24*7),
-		mkPercent("Routines", u.SevenDayRoutines, weeklyReset, 24*7),
+		mkPercent("Daily Routines", u.SevenDayRoutines, weeklyReset, 24*7),
 		mkPercent("OAuth apps", u.SevenDayOAuthApps, weeklyReset, 24*7),
 	}
 	if u.ExtraUsage != nil && u.ExtraUsage.IsEnabled {

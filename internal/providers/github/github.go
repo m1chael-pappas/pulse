@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/michaelpappas/pulse/internal/providers"
 )
 
@@ -296,15 +298,16 @@ func buildSection(title string, prs []pr, login string) *providers.Section {
 	}
 	rows := make([]providers.BreakdownEntry, 0, len(prs))
 	for _, pr := range prs {
-		icon := checkIcon(pr.Checks, pr.IsDraft)
 		repo := shortRepo(pr.Repository.NameWithOwner)
 		who := ""
 		if pr.Author.Login != "" && pr.Author.Login != login {
 			who = " @" + pr.Author.Login
 		}
-		// "✓ #1106 webverse @teammate · feat(ui): import 128 icons…"
-		label := fmt.Sprintf("%s #%d %s%s · %s", icon, pr.Number, repo, who, pr.Title)
+		// e.g. "#1106 webverse @teammate · feat(ui): import 128 icons…"
+		// (the green/red ✓/✗ glyph is rendered separately by the tile)
+		label := fmt.Sprintf("#%d %s%s · %s", pr.Number, repo, who, pr.Title)
 		rows = append(rows, providers.BreakdownEntry{
+			Glyph: checkIcon(pr.Checks, pr.IsDraft),
 			Label: label,
 			Value: float64(time.Since(pr.UpdatedAt).Seconds()),
 			Unit:  unitAge,
@@ -322,19 +325,28 @@ const unitAge providers.Unit = "age"
 
 func checkIcon(state string, isDraft bool) string {
 	if isDraft {
-		return "○"
+		return dimStyle.Render("○")
 	}
 	switch strings.ToUpper(state) {
 	case "SUCCESS":
-		return "✓"
+		return greenStyle.Render("✓")
 	case "FAILURE", "ERROR":
-		return "✗"
+		return redStyle.Render("✗")
 	case "PENDING", "EXPECTED":
-		return "⋯"
+		return amberStyle.Render("⋯")
 	default:
-		return "·"
+		return dimStyle.Render("·")
 	}
 }
+
+// CI-state glyph palette. Same colors as the Claude Status tile so users
+// learn one mapping (green = good, red = bad, amber = in flight).
+var (
+	greenStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Bold(true)
+	redStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+	amberStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	dimStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+)
 
 func shortRepo(full string) string {
 	if i := strings.LastIndex(full, "/"); i >= 0 && i < len(full)-1 {

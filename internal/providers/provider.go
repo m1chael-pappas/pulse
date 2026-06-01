@@ -49,7 +49,12 @@ type Window struct {
 // BreakdownEntry is a labelled slice of cost or count (e.g. per-model spend).
 // When URL is set, the tile renderer wraps the label in an OSC 8 hyperlink
 // escape — modern terminals render it as a cmd-clickable link.
+//
+// Glyph is an optional pre-styled (already ANSI-colored) prefix character
+// like a green ✓ or red ✗. The tile renders it untouched so its color
+// survives the dim styling applied to the label proper.
 type BreakdownEntry struct {
+	Glyph string
 	Label string
 	Value float64
 	Unit  Unit

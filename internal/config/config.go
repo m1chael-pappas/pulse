@@ -22,10 +22,25 @@ import (
 
 // Config is the root of pulse's TOML config.
 type Config struct {
-	ClaudeCode ClaudeCodeConfig `toml:"claudecode"`
-	GCal       GCalConfig       `toml:"gcal"`
-	MacCal     MacCalConfig     `toml:"maccal"`
-	GitHub     GitHubConfig     `toml:"github"`
+	ClaudeCode   ClaudeCodeConfig   `toml:"claudecode"`
+	ClaudeStatus ClaudeStatusConfig `toml:"claudestatus"`
+	GCal         GCalConfig         `toml:"gcal"`
+	MacCal       MacCalConfig       `toml:"maccal"`
+	GitHub       GitHubConfig       `toml:"github"`
+}
+
+// ClaudeStatusConfig toggles the public-status-page tile. Pointer-bool so
+// "missing key" defaults to on; only an explicit false disables it.
+type ClaudeStatusConfig struct {
+	Enabled *bool `toml:"enabled"`
+}
+
+// IsEnabled returns whether the tile should appear.
+func (c ClaudeStatusConfig) IsEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
 }
 
 // GitHubConfig configures the GitHub PR tile. Uses the gh CLI's auth
@@ -190,6 +205,12 @@ lookahead_days = 7
 ics_url        = ""
 lookahead      = 6
 lookahead_days = 7
+
+[claudestatus]
+# Surface status.claude.com (public Statuspage). Shows per-component
+# state for claude.ai, the API, Claude Code, etc. plus any active
+# incidents. Refreshes every 60s; no auth needed.
+enabled = true
 
 [github]
 # Open PRs you authored + ones awaiting your review. Uses the gh CLI's

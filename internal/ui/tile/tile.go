@@ -30,17 +30,20 @@ func Render(snap providers.Snapshot, width, height int, focused bool) string {
 	if focused {
 		border = borderStyle.BorderForeground(lipgloss.Color("205"))
 	}
-	inner := width - 4
-	if inner < 20 {
-		inner = 20
-	}
+	inner := contentWidth(width)
 
 	lines := buildLines(snap, inner)
 	body := lipgloss.JoinVertical(lipgloss.Left, lines...)
 
-	style := border.Width(width)
+	// lipgloss.Width() sets content+padding; the border adds 2 more cols
+	// on top. We subtract 2 here so the rendered tile's visible width
+	// matches the `width` argument exactly — keeps adjacent tiles in a
+	// row aligned and stops the right edge spilling past the terminal.
+	style := border.Width(width - 2)
 	if height > 0 {
-		style = style.Height(height)
+		// Height parameter follows the same convention: subtract 2 for
+		// the top + bottom border rows.
+		style = style.Height(height - 2)
 	}
 	return style.Render(body)
 }
@@ -49,11 +52,19 @@ func Render(snap providers.Snapshot, width, height int, focused bool) string {
 // at the given width, including the two border rows. Callers in a flex
 // layout can use this to size each tile to its content.
 func NaturalHeight(snap providers.Snapshot, width int) int {
+	return len(buildLines(snap, contentWidth(width))) + 2 // top + bottom border
+}
+
+// contentWidth returns the usable inner width inside the tile's borders
+// and padding. Render() and NaturalHeight() must agree on this, so it
+// lives in one place.
+func contentWidth(width int) int {
+	// 2 cols border + 2 cols horizontal padding = 4 cols of chrome.
 	inner := width - 4
 	if inner < 20 {
 		inner = 20
 	}
-	return len(buildLines(snap, inner)) + 2 // top + bottom border
+	return inner
 }
 
 func buildLines(snap providers.Snapshot, inner int) []string {
@@ -157,6 +168,10 @@ func formatValue(u providers.Unit, v float64) string {
 		return fmt.Sprintf("%.0f", v)
 	case "age":
 		return humanDuration(time.Duration(v) * time.Second)
+	case "status":
+		// Status-pill rows render their state in the label itself; the
+		// value column would just be noise. Suppress it.
+		return ""
 	default:
 		return fmt.Sprintf("%.2f", v)
 	}
@@ -276,15 +291,32 @@ func eventRow(e providers.Event, inner int) string {
 
 func breakdownLine(b providers.BreakdownEntry, inner int) string {
 	val := formatValue(b.Unit, b.Value)
-	labelW := inner - lipgloss.Width(val) - 1
+	// Reserve room for value + separator. If a glyph is present it eats
+	// 2 cols (glyph + trailing space) of the label budget — pre-colored
+	// and emitted verbatim so the green/red ANSI survives.
+	valW := lipgloss.Width(val)
+	sep := 0
+	if val != "" {
+		sep = 1
+	}
+	glyphPrefix := ""
+	glyphW := 0
+	if b.Glyph != "" {
+		glyphPrefix = b.Glyph + " "
+		glyphW = lipgloss.Width(glyphPrefix)
+	}
+	labelW := inner - valW - sep - glyphW
 	if labelW < 1 {
 		labelW = 1
 	}
 	clipped := clip(b.Label, labelW)
 	padded := padRight(clipped, labelW)
-	label := labelStyle.Render(padded)
+	label := glyphPrefix + labelStyle.Render(padded)
 	if b.URL != "" {
 		label = osc8Link(b.URL, label)
+	}
+	if val == "" {
+		return label
 	}
 	return label + " " + val
 }
@@ -321,26 +353,20 @@ func statCell(b providers.BreakdownEntry, w int) string {
 	)
 }
 
-// histogram renders a multi-row bar chart spanning the full inner width.
-// Each data point is stretched horizontally to fill the available columns
-// (so 30 days across a 60-col tile becomes 2 cols/day). Bar heights use
-// 8-step block-quadrant precision (▁▂▃▄▅▆▇█), giving rows×8 levels of
-// vertical resolution.
+// histogram renders a braille-based area chart spanning the full inner
+// width. Braille cells encode 2 horizontal × 4 vertical dot positions
+// each, so a `rows`-tall chart gives `rows*4` levels of vertical
+// resolution and 2× horizontal resolution per cell — roughly 8× the
+// detail of an equivalently sized block-character chart. Each cell is
+// colored by its peak intensity to give a heatmap feel that mirrors how
+// modern sparkline UIs (Grafana, Datadog) read at a glance.
 func histogram(points []providers.HistoryPoint, inner int) string {
-	if len(points) == 0 || inner < len(points) {
+	if len(points) == 0 || inner < 2 {
 		return ""
 	}
-	const rows = 6
-	const subSteps = 8
-
-	// Stretch points to fill the width: each point gets perPoint columns,
-	// with any leftover columns distributed to the left so the right edge
-	// (today) lands flush against the tile edge.
-	perPoint := inner / len(points)
-	extra := inner - perPoint*len(points)
-	if perPoint < 1 {
-		perPoint = 1
-	}
+	const rows = 4
+	const dotRowsPerCell = 4
+	totalDots := rows * dotRowsPerCell
 
 	maxV := 0.0
 	for _, p := range points {
@@ -349,62 +375,154 @@ func histogram(points []providers.HistoryPoint, inner int) string {
 		}
 	}
 
-	bars := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
-
-	type col struct {
-		fillRows int
-		topRune  rune
-		empty    bool
-	}
-	colData := make([]col, 0, inner)
-	for i, p := range points {
-		c := col{}
-		if maxV == 0 || p.Value <= 0 {
-			c.empty = true
-		} else {
-			levels := int((p.Value / maxV) * float64(rows*subSteps))
-			if levels < 1 {
-				levels = 1
-			}
-			c.fillRows = levels / subSteps
-			partial := levels % subSteps
-			if partial > 0 && c.fillRows < rows {
-				c.topRune = bars[partial-1]
+	// Each cell holds 2 dot-columns. We project the N data points across
+	// inner*2 dot-columns by uniform sampling — that way 30 days stretches
+	// smoothly across whatever the tile width happens to be without
+	// visible aliasing in the rendered shape.
+	totalDotCols := inner * 2
+	heights := make([]int, totalDotCols)
+	for col := 0; col < totalDotCols; col++ {
+		idx := col * len(points) / totalDotCols
+		if idx >= len(points) {
+			idx = len(points) - 1
+		}
+		v := points[idx].Value
+		h := 0
+		if maxV > 0 && v > 0 {
+			h = int(v/maxV*float64(totalDots) + 0.5)
+			if h < 1 {
+				h = 1
 			}
 		}
-		// First `extra` points get one extra column so we fill exactly.
-		width := perPoint
-		if i < extra {
-			width++
-		}
-		for j := 0; j < width; j++ {
-			colData = append(colData, c)
-		}
+		heights[col] = h
 	}
 
 	rowStrs := make([]string, rows)
 	for r := 0; r < rows; r++ {
+		// Row 0 is the top of the chart; the bottom row is `rows-1`. Each
+		// row covers a 4-dot band; minDot is the dot index at the bottom
+		// of this row's band, measured from the chart's baseline.
 		rowFromBottom := rows - 1 - r
+		minDot := rowFromBottom * dotRowsPerCell
 		var b strings.Builder
-		for _, c := range colData {
-			switch {
-			case c.empty:
-				b.WriteRune(' ')
-			case c.fillRows > rowFromBottom:
-				b.WriteRune('█')
-			case c.fillRows == rowFromBottom && c.topRune != 0:
-				b.WriteRune(c.topRune)
-			default:
-				b.WriteRune(' ')
+		for cell := 0; cell < inner; cell++ {
+			left := clampDot(heights[cell*2]-minDot, dotRowsPerCell)
+			right := clampDot(heights[cell*2+1]-minDot, dotRowsPerCell)
+			peak := left
+			if right > peak {
+				peak = right
 			}
+			if peak == 0 && left == 0 && right == 0 {
+				b.WriteRune(' ')
+				continue
+			}
+			rune := brailleCell(left, right)
+			// Color by absolute height (rowFromBottom * 4 + peak) so the
+			// gradient stays consistent across rows of the same column.
+			absHeight := rowFromBottom*dotRowsPerCell + peak
+			ratio := float64(absHeight) / float64(totalDots)
+			b.WriteString(heatmap(ratio).Render(string(rune)))
 		}
-		rowStrs[r] = histStyle.Render(b.String())
+		rowStrs[r] = b.String()
 	}
-	axis := histogramAxis(points, perPoint, extra)
+	axis := histogramAxisBraille(points, inner)
 	if axis != "" {
 		rowStrs = append(rowStrs, axisStyle.Render(axis))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, rowStrs...)
+}
+
+func clampDot(v, max int) int {
+	if v < 0 {
+		return 0
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
+// brailleCell maps a (left, right) fill count in dots (0–4 each) to the
+// matching braille glyph. Braille codepoints (U+2800–U+28FF) carry one
+// bit per dot, with this visual layout:
+//
+//	dot1 dot4     left-top
+//	dot2 dot5
+//	dot3 dot6
+//	dot7 dot8     left-bottom (added in 8-dot braille)
+//
+// We fill from the bottom up, so 1 dot in the left column lights dot7,
+// 2 dots lights dot7+dot3, etc.
+func brailleCell(left, right int) rune {
+	const base = rune(0x2800)
+	// Bottom-up offsets within the braille bit pattern.
+	leftMasks := [4]rune{0x40, 0x04, 0x02, 0x01}  // dot7, dot3, dot2, dot1
+	rightMasks := [4]rune{0x80, 0x20, 0x10, 0x08} // dot8, dot6, dot5, dot4
+	var mask rune
+	for i := 0; i < left; i++ {
+		mask |= leftMasks[i]
+	}
+	for i := 0; i < right; i++ {
+		mask |= rightMasks[i]
+	}
+	return base + mask
+}
+
+// heatmap returns a lipgloss style for a value in [0,1]: low values use a
+// cool blue, mid values are green, high values shift through amber to
+// red. Five stops keep the gradient legible on a 256-color terminal.
+func heatmap(ratio float64) lipgloss.Style {
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio > 1 {
+		ratio = 1
+	}
+	color := lipgloss.Color("33") // blue
+	switch {
+	case ratio >= 0.85:
+		color = lipgloss.Color("196") // red
+	case ratio >= 0.65:
+		color = lipgloss.Color("214") // amber
+	case ratio >= 0.4:
+		color = lipgloss.Color("82") // green
+	case ratio >= 0.2:
+		color = lipgloss.Color("44") // teal
+	}
+	return lipgloss.NewStyle().Foreground(color)
+}
+
+// histogramAxisBraille places day-of-week initials evenly under the
+// braille cells. Each cell holds 2 points, so we sample every other
+// point — that keeps the axis from being a wall of letters and aligns
+// each label with the cell that contains its data.
+func histogramAxisBraille(points []providers.HistoryPoint, inner int) string {
+	if len(points) == 0 || inner < 1 {
+		return ""
+	}
+	var b strings.Builder
+	for cell := 0; cell < inner; cell++ {
+		idx := (cell*2 + 1) * len(points) / (inner * 2)
+		if idx >= len(points) {
+			idx = len(points) - 1
+		}
+		// Show an initial only at the rightmost dot-column of each cell
+		// so labels stay aligned with the data underneath.
+		if cell == 0 || idx != prevAxisIdx(points, cell-1, inner) {
+			b.WriteString(dayInitial(points[idx].At))
+		} else {
+			b.WriteByte(' ')
+		}
+	}
+	return b.String()
+}
+
+func prevAxisIdx(points []providers.HistoryPoint, cell, inner int) int {
+	idx := (cell*2 + 1) * len(points) / (inner * 2)
+	if idx >= len(points) {
+		idx = len(points) - 1
+	}
+	return idx
 }
 
 // histogramAxis renders a row of day-of-week initials (M/T/W/T/F/S/S)
@@ -479,7 +597,6 @@ func budgetBar(used, limit float64, width int) string {
 	if ratio > 1 {
 		ratio = 1
 	}
-	filled := int(ratio * float64(width))
 	color := lipgloss.Color("82")
 	switch {
 	case ratio >= 0.9:
@@ -487,9 +604,7 @@ func budgetBar(used, limit float64, width int) string {
 	case ratio >= 0.7:
 		color = lipgloss.Color("214")
 	}
-	fill := lipgloss.NewStyle().Foreground(color).Render(strings.Repeat("█", filled))
-	empty := lipgloss.NewStyle().Foreground(lipgloss.Color("238")).Render(strings.Repeat("░", width-filled))
-	return fill + empty
+	return roundedBar(ratio, width, color)
 }
 
 func elapsedBar(start, end time.Time, width int) string {
@@ -504,9 +619,47 @@ func elapsedBar(start, end time.Time, width int) string {
 	if done > 1 {
 		done = 1
 	}
-	filled := int(done * float64(width))
-	fill := lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Render(strings.Repeat("▓", filled))
-	empty := lipgloss.NewStyle().Foreground(lipgloss.Color("238")).Render(strings.Repeat("░", width-filled))
+	return roundedBar(done, width, lipgloss.Color("63"))
+}
+
+// roundedBar renders a progress bar with semicircle end caps (◖ … ◗),
+// solid blocks in the middle, and a dotted track for the empty portion.
+// The caps make the bar read as a discrete pill even on terminals with
+// no anti-aliasing — much more "modern" than the flat block / ░ combo
+// most TUIs ship.
+func roundedBar(ratio float64, width int, color lipgloss.Color) string {
+	if width < 2 {
+		return ""
+	}
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio > 1 {
+		ratio = 1
+	}
+	filled := int(ratio * float64(width))
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > width {
+		filled = width
+	}
+
+	fillStyle := lipgloss.NewStyle().Foreground(color)
+	emptyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
+
+	var fill string
+	switch filled {
+	case 0:
+		fill = ""
+	case 1:
+		fill = fillStyle.Render("◖")
+	case 2:
+		fill = fillStyle.Render("◖◗")
+	default:
+		fill = fillStyle.Render("◖" + strings.Repeat("█", filled-2) + "◗")
+	}
+	empty := emptyStyle.Render(strings.Repeat("░", width-filled))
 	return fill + empty
 }
 
