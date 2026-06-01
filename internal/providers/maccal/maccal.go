@@ -225,8 +225,19 @@ end pad
 }
 
 func parseEvents(raw string) []providers.Event {
+	// Dedupe by (start, title). AppleScript's `every event` query can
+	// emit the same event multiple times when a recurring series has been
+	// expanded server-side and the parent rule is also returned — and
+	// users frequently end up with the same event invite mirrored across
+	// two calendars (personal + work). Either way the right move is to
+	// collapse identical (start, title) pairs.
+	seen := make(map[string]struct{})
 	var out []providers.Event
+
 	sc := bufio.NewScanner(strings.NewReader(raw))
+	// Calendar.app can dump events with very long location strings —
+	// 64KiB is the default Scanner limit and we've already overflowed it.
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	for sc.Scan() {
 		line := strings.TrimRight(sc.Text(), "\r")
 		if line == "" {
@@ -240,12 +251,19 @@ func parseEvents(raw string) []providers.Event {
 		if start.IsZero() {
 			continue
 		}
+		title := strings.TrimSpace(parts[4])
+		key := start.Format(time.RFC3339) + "|" + strings.ToLower(title)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+
 		end := parseLocalISO(parts[1])
 		allDay := strings.EqualFold(strings.TrimSpace(parts[2]), "true")
 		out = append(out, providers.Event{
 			Start:    start,
 			End:      end,
-			Title:    strings.TrimSpace(parts[4]),
+			Title:    title,
 			Location: strings.TrimSpace(parts[5]),
 			AllDay:   allDay,
 		})
