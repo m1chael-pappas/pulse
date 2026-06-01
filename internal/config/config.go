@@ -32,8 +32,10 @@ type Config struct {
 // so no token belongs here. Enabled is a pointer so we can distinguish
 // "not set in config" (default → on) from "explicitly off".
 type GitHubConfig struct {
-	Enabled *bool `toml:"enabled"`
-	Limit   int   `toml:"limit"`
+	Enabled *bool    `toml:"enabled"`
+	Limit   int      `toml:"limit"`
+	Repos   []string `toml:"repos"` // optional: ["owner/name", ...]
+	Orgs    []string `toml:"orgs"`  // optional: ["SafetyCulture", ...]
 }
 
 // IsEnabled returns whether the tile should appear. Missing key = on,
@@ -189,8 +191,11 @@ lookahead      = 6
 lookahead_days = 7
 
 [github]
-# Shows open PRs you authored + ones awaiting your review. Uses the
-# gh CLI's auth — run 'gh auth login' first if you haven't.
+# Open PRs you authored + ones awaiting your review. Uses the gh CLI's
+# auth — run 'gh auth login' first if you haven't.
 enabled = true
 limit   = 5   # max PRs per section (yours / review queue)
+# Optional filters. Leave both empty to search all of GitHub.
+repos   = []  # e.g. ["SafetyCulture/safetyculture-webverse"]
+orgs    = []  # e.g. ["SafetyCulture"]
 `

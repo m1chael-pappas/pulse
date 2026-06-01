@@ -7,25 +7,30 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) + [Lip Gloss
 ## Install
 
 ```bash
-brew install go            # if you don't have Go
+brew install go             # if you don't have Go
 git clone https://github.com/michaelpappas/pulse.git
 cd pulse
-go install ./cmd/pulse
+make install                # → ~/go/bin/pulse, plus a PATH hint if needed
+pulse doctor                # verify setup
 ```
 
-`go install` puts the binary at `$(go env GOPATH)/bin/pulse` — usually `~/go/bin/pulse`. **That directory may not be on your `PATH`.** Check and fix once:
+If `pulse: command not found` after install, add Go's bin dir to your PATH once:
 
 ```bash
-# Add ~/go/bin to PATH if it isn't already
 echo 'export PATH="$HOME/go/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-Then `pulse` runs from anywhere. To verify:
+## Development
 
 ```bash
-pulse doctor          # checks PATH, deps, and config
+make dev          # run from source (no install) — use this while iterating
+make install      # reinstall the global `pulse` binary
+make check        # vet + tests
+make help         # list all targets
 ```
+
+`make dev` compiles fresh every run, so source changes are picked up immediately. `make install` snapshots the current code into the global binary — re-run when you want to update what `pulse` (from anywhere) points to.
 
 ## First run
 

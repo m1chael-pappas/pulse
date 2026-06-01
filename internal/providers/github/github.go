@@ -21,13 +21,16 @@ import (
 type Provider struct {
 	// Limit caps PRs per section (authored + review queue). Default 5.
 	Limit int
+	// Repos and Orgs scope the GitHub-wide search. Empty = no scoping.
+	Repos []string
+	Orgs  []string
 }
 
-func New(limit int) *Provider {
+func New(limit int, repos, orgs []string) *Provider {
 	if limit <= 0 {
 		limit = 5
 	}
-	return &Provider{Limit: limit}
+	return &Provider{Limit: limit, Repos: repos, Orgs: orgs}
 }
 
 func (p *Provider) Name() string             { return "GitHub" }
@@ -52,7 +55,7 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	}
 	snap.Header = "@" + login
 
-	authored, review, err := fetchPRs(ctx, login, p.Limit)
+	authored, review, err := fetchPRs(ctx, login, p.Limit, p.scopeQuery())
 	if err != nil {
 		snap.Status = providers.StatusWarn
 		snap.Err = err
@@ -138,12 +141,33 @@ query($authored: String!, $review: String!, $limit: Int!) {
   }
 }`
 
-func fetchPRs(ctx context.Context, login string, limit int) (authored, review []pr, err error) {
+// scopeQuery returns the trailing 'repo:foo/bar org:foo' fragment that
+// restricts a GitHub search to the user's configured repos / orgs.
+// Multiple values are OR'd by GitHub's search engine.
+func (p *Provider) scopeQuery() string {
+	parts := make([]string, 0, len(p.Repos)+len(p.Orgs))
+	for _, r := range p.Repos {
+		if r = strings.TrimSpace(r); r != "" {
+			parts = append(parts, "repo:"+r)
+		}
+	}
+	for _, o := range p.Orgs {
+		if o = strings.TrimSpace(o); o != "" {
+			parts = append(parts, "org:"+o)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " " + strings.Join(parts, " ")
+}
+
+func fetchPRs(ctx context.Context, login string, limit int, scope string) (authored, review []pr, err error) {
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
-	authoredQuery := fmt.Sprintf("is:pr is:open author:%s archived:false", login)
-	reviewQuery := fmt.Sprintf("is:pr is:open review-requested:%s archived:false", login)
+	authoredQuery := fmt.Sprintf("is:pr is:open author:%s archived:false%s", login, scope)
+	reviewQuery := fmt.Sprintf("is:pr is:open review-requested:%s archived:false%s", login, scope)
 
 	out, err := exec.CommandContext(cctx, "gh", "api", "graphql",
 		"-f", "query="+prsQuery,
