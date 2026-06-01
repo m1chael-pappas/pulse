@@ -69,6 +69,9 @@ func buildLines(snap providers.Snapshot, inner int) []string {
 		for _, w := range snap.Windows {
 			lines = append(lines, windowLines(w, inner)...)
 		}
+		if len(snap.Events) > 0 {
+			lines = append(lines, eventLines(snap.Events, inner)...)
+		}
 		if len(snap.Stats) > 0 {
 			lines = append(lines, "", statsGrid(snap.Stats, inner))
 		}
@@ -186,6 +189,64 @@ func formatUSD(v float64) string {
 		return fmt.Sprintf("-$%s.%02d", b.String(), cents)
 	}
 	return fmt.Sprintf("$%s.%02d", b.String(), cents)
+}
+
+// eventLines renders upcoming-event rows. Layout:
+//   Today
+//     09:00 — Standup (15m)
+//     14:00 — 1:1 Alex
+//   Tomorrow
+//     all day — Public holiday
+func eventLines(events []providers.Event, inner int) []string {
+	if len(events) == 0 {
+		return nil
+	}
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
+	var lines []string
+	var lastBucket string
+	for _, e := range events {
+		bucket := dayBucket(e.Start, today)
+		if bucket != lastBucket {
+			lines = append(lines, "", labelStyle.Render(bucket))
+			lastBucket = bucket
+		}
+		lines = append(lines, eventRow(e, inner))
+	}
+	return lines
+}
+
+func dayBucket(at, today time.Time) string {
+	day := time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, at.Location())
+	switch days := int(day.Sub(today).Hours() / 24); {
+	case days < 0:
+		return "Earlier"
+	case days == 0:
+		return "Today"
+	case days == 1:
+		return "Tomorrow"
+	case days < 7:
+		return at.Format("Monday")
+	default:
+		return at.Format("Mon Jan 2")
+	}
+}
+
+func eventRow(e providers.Event, inner int) string {
+	timeStr := "all day"
+	if !e.AllDay {
+		timeStr = e.Start.Format("15:04")
+	}
+	title := e.Title
+	if title == "" {
+		title = "(no title)"
+	}
+	left := fmt.Sprintf("  %s  %s", valueStyle.Render(timeStr), title)
+	if lipgloss.Width(left) > inner {
+		left = clip(left, inner)
+	}
+	return left
 }
 
 func breakdownLine(b providers.BreakdownEntry, inner int) string {

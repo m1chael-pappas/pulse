@@ -59,6 +59,15 @@ type HistoryPoint struct {
 	Value float64
 }
 
+// Event is a single calendar entry rendered as one line in a tile.
+type Event struct {
+	Start    time.Time
+	End      time.Time
+	Title    string
+	Location string
+	AllDay   bool
+}
+
 // Snapshot is the point-in-time state of a provider.
 type Snapshot struct {
 	Name      string
@@ -67,6 +76,7 @@ type Snapshot struct {
 	Header    string // top-right corner of tile (e.g. plan tier)
 	CostUSD   float64
 	Windows   []Window
+	Events    []Event          // optional — upcoming calendar events
 	Breakdown []BreakdownEntry // optional — "where the cost came from"
 	History   []HistoryPoint   // optional — daily cost histogram
 	Stats     []BreakdownEntry // optional — labelled stat grid (Today / 30d / etc)

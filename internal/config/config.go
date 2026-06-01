@@ -23,6 +23,22 @@ import (
 // Config is the root of pulse's TOML config.
 type Config struct {
 	ClaudeCode ClaudeCodeConfig `toml:"claudecode"`
+	GCal       GCalConfig       `toml:"gcal"`
+}
+
+// GCalConfig configures the Google Calendar provider via a public iCal
+// subscription URL. Pulse never touches Google OAuth — the secret URL
+// granted by Google Calendar Settings → Integrate Calendar is all we use.
+type GCalConfig struct {
+	// ICSURL is the "Secret address in iCal format" from Google Calendar.
+	// Empty disables the gcal tile entirely.
+	ICSURL string `toml:"ics_url"`
+
+	// Lookahead caps how many future events to surface (default 6).
+	Lookahead int `toml:"lookahead"`
+
+	// LookaheadDays caps the time window (default 7).
+	LookaheadDays int `toml:"lookahead_days"`
 }
 
 // ClaudeCodeConfig configures the Claude Code provider.
@@ -101,4 +117,14 @@ note = "off"
 session_budget = 0
 daily_budget   = 0
 month_budget   = 0
+
+[gcal]
+# Google Calendar → Settings → pick a calendar → "Integrate calendar" →
+# copy "Secret address in iCal format". Paste it below to enable the
+# upcoming-events tile. Leave empty to disable the tile entirely.
+#
+# Anyone with this URL can read your events — don't share it.
+ics_url        = ""
+lookahead      = 6   # max events to show
+lookahead_days = 7   # cut off events beyond this many days out
 `
