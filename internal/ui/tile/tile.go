@@ -142,8 +142,12 @@ func formatValue(u providers.Unit, v float64) string {
 		return humanTokens(int64(v))
 	case providers.UnitPercent:
 		return fmt.Sprintf("%.0f%%", v)
-	default:
+	case providers.UnitGiB:
+		return fmt.Sprintf("%.1f GiB", v)
+	case providers.UnitCount:
 		return fmt.Sprintf("%.0f", v)
+	default:
+		return fmt.Sprintf("%.2f", v)
 	}
 }
 

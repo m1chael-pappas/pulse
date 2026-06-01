@@ -11,6 +11,7 @@ import (
 	"github.com/michaelpappas/pulse/internal/config"
 	"github.com/michaelpappas/pulse/internal/providers"
 	"github.com/michaelpappas/pulse/internal/providers/claudecode"
+	"github.com/michaelpappas/pulse/internal/providers/system"
 	"github.com/michaelpappas/pulse/internal/ui/tile"
 )
 
@@ -28,7 +29,7 @@ func NewApp(cfg config.Config) App {
 		cfg.ClaudeCode.DailyBudget,
 		cfg.ClaudeCode.MonthBudget,
 	)
-	provs := []providers.Provider{cc}
+	provs := []providers.Provider{cc, system.New()}
 	return App{
 		providers: provs,
 		snapshots: make([]providers.Snapshot, len(provs)),
