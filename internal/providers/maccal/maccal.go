@@ -1,10 +1,13 @@
-// Package maccal reads upcoming events from macOS Calendar.app via
-// AppleScript. No OAuth, no Google Cloud Console, no iCal subscription
-// URLs — works with any account Calendar.app is already syncing
-// (Google, iCloud, Exchange, etc.).
+// Package maccal reads upcoming events from macOS Calendar.app.
 //
-// First run triggers a one-time TCC prompt ("pulse wants to access your
-// calendar"); after the user clicks OK, subsequent calls are silent.
+// Uses icalBuddy (brew install ical-buddy) because it talks to EventKit
+// and properly expands recurring events. AppleScript's `every event whose
+// start date >=` filter silently drops every recurring event whose first
+// occurrence is in the past — which on most work calendars is most events.
+//
+// Works with any account Calendar.app is already syncing (Google via
+// System Settings → Internet Accounts, iCloud, Exchange). First run pops
+// a one-time TCC prompt; after Allow it's silent.
 package maccal
 
 import (
@@ -23,7 +26,7 @@ import (
 
 type Provider struct {
 	// Calendars, when non-empty, restricts the fetch to just these
-	// calendar names. Empty means "every visible calendar".
+	// calendar names. Empty = every visible calendar.
 	Calendars []string
 
 	// Lookahead caps how many events to surface.
@@ -54,16 +57,24 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 		return snap
 	}
 
+	bin, err := findIcalBuddy()
+	if err != nil {
+		snap.Status = providers.StatusWarn
+		snap.Subtitle = "install icalBuddy: brew install ical-buddy"
+		snap.Err = err
+		return snap
+	}
+
 	lookahead := p.Lookahead
 	if lookahead <= 0 {
-		lookahead = 6
+		lookahead = 20
 	}
 	days := p.LookaheadDays
 	if days <= 0 {
 		days = 7
 	}
 
-	events, err := fetchEvents(ctx, p.Calendars, days)
+	events, err := fetchEvents(ctx, bin, p.Calendars, days)
 	if err != nil {
 		snap.Status = providers.StatusWarn
 		snap.Err = err
@@ -93,11 +104,177 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	return snap
 }
 
+func findIcalBuddy() (string, error) {
+	for _, name := range []string{"icalBuddy", "icalbuddy"} {
+		if p, err := exec.LookPath(name); err == nil {
+			return p, nil
+		}
+	}
+	return "", errors.New("icalBuddy not on PATH (brew install ical-buddy)")
+}
+
+// fetchEvents runs icalBuddy and parses its bullet-delimited output.
+//
+// We use `-b` to control the bullet, `-ps` for "no separator" (single
+// space) between item parts, and `-iep` to choose which event properties
+// to dump in a known order. icalBuddy's `eventsToday+N` window covers
+// today plus N more days and crucially expands recurring events.
+func fetchEvents(ctx context.Context, bin string, cals []string, days int) ([]providers.Event, error) {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	args := []string{
+		"-nc",                              // no calendar names header
+		"-npn",                             // no property names
+		"-eep", "notes,attendees,url",      // exclude noisy props
+		"-iep", "title,datetime,location",  // include only these
+		"-b", "@@EVENT@@",                  // unique bullet so events split cleanly
+		"-ps", "| @@FIELD@@ |",             // property separator
+		"-df", "%Y-%m-%d",                  // ISO dates
+		"-tf", "%H:%M",                     // 24h times
+	}
+	if len(cals) > 0 {
+		args = append(args, "-ic", strings.Join(cals, ","))
+	}
+	args = append(args, fmt.Sprintf("eventsToday+%d", days))
+
+	out, err := exec.CommandContext(cctx, bin, args...).Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return nil, fmt.Errorf("icalBuddy: %s", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return nil, err
+	}
+	return parseIcalBuddy(string(out)), nil
+}
+
+// parseIcalBuddy parses our bullet-delimited icalBuddy output. Each event
+// looks like:
+//
+//	@@EVENT@@ Standup
+//	    | @@FIELD@@ | 2026-06-01 at 12:30 - 13:00
+//	    | @@FIELD@@ | Sydney-G-Ground
+//
+// We split on @@EVENT@@ to get one chunk per event, then walk lines to
+// extract title (the first line) and parse the datetime line.
+func parseIcalBuddy(raw string) []providers.Event {
+	seen := make(map[string]struct{})
+	var out []providers.Event
+
+	chunks := strings.Split(raw, "@@EVENT@@")
+	for _, chunk := range chunks {
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" {
+			continue
+		}
+		title, datetimeLine, location := splitChunk(chunk)
+		start, end, allDay := parseDateTime(datetimeLine)
+		if start.IsZero() {
+			continue
+		}
+		key := start.Format(time.RFC3339) + "|" + strings.ToLower(title)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, providers.Event{
+			Start:    start,
+			End:      end,
+			Title:    title,
+			Location: location,
+			AllDay:   allDay,
+		})
+	}
+	return out
+}
+
+func splitChunk(chunk string) (title, datetime, location string) {
+	sc := bufio.NewScanner(strings.NewReader(chunk))
+	sc.Buffer(make([]byte, 64*1024), 1<<20)
+	first := true
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		if first {
+			title = line
+			first = false
+			continue
+		}
+		// Property lines are "| @@FIELD@@ | value"
+		const sep = "| @@FIELD@@ |"
+		if i := strings.Index(line, sep); i >= 0 {
+			value := strings.TrimSpace(line[i+len(sep):])
+			switch {
+			case looksLikeDateTime(value):
+				datetime = value
+			default:
+				if location == "" {
+					location = value
+				}
+			}
+		}
+	}
+	return
+}
+
+func looksLikeDateTime(s string) bool {
+	return len(s) >= 10 && (s[4] == '-' || strings.Contains(s, " at "))
+}
+
+// parseDateTime handles icalBuddy's date/time formats:
+//
+//	2026-06-01 at 12:30 - 13:00              (today / single-day)
+//	2026-06-01 at 12:30 - 2026-06-02 at 13:00 (multi-day)
+//	2026-06-01                               (all-day)
+//	today at 12:30 - 13:00                   (relative — we asked for ISO so unusual)
+func parseDateTime(s string) (start, end time.Time, allDay bool) {
+	if s == "" {
+		return
+	}
+
+	// Multi-day case has " - " between two complete "<date> at <time>"
+	// fragments; single-day has just " - <time>".
+	if i := strings.Index(s, " - "); i >= 0 {
+		left := strings.TrimSpace(s[:i])
+		right := strings.TrimSpace(s[i+3:])
+		start = parseFragment(left, time.Time{})
+		end = parseFragment(right, start)
+		allDay = !strings.Contains(left, " at ")
+		return
+	}
+	start = parseFragment(strings.TrimSpace(s), time.Time{})
+	allDay = !strings.Contains(s, " at ")
+	return
+}
+
+// parseFragment turns "2026-06-01 at 12:30" or "12:30" or "2026-06-01"
+// into a local time. For a bare "12:30" we borrow the date from the start
+// time of the same event (handed in as base).
+func parseFragment(s string, base time.Time) time.Time {
+	if strings.Contains(s, " at ") {
+		t, err := time.ParseInLocation("2006-01-02 at 15:04", s, time.Local)
+		if err != nil {
+			return time.Time{}
+		}
+		return t
+	}
+	if t, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
+		return t
+	}
+	// Bare time — combine with the date from the base.
+	if t, err := time.ParseInLocation("15:04", s, time.Local); err == nil && !base.IsZero() {
+		return time.Date(base.Year(), base.Month(), base.Day(), t.Hour(), t.Minute(), 0, 0, time.Local)
+	}
+	return time.Time{}
+}
+
 func filterUpcoming(events []providers.Event, now time.Time) []providers.Event {
 	out := events[:0]
 	cutoff := now.Add(-5 * time.Minute)
 	for _, e := range events {
-		// Still "now" if it started recently and hasn't ended.
 		if !e.End.IsZero() && e.End.Before(cutoff) {
 			continue
 		}
@@ -132,174 +309,16 @@ func headerForNext(e providers.Event, now time.Time) string {
 	}
 }
 
-// fetchEvents shells out to osascript. AppleScript is the most boring,
-// permission-friendly path: a single 5min refresh costs ~200ms and never
-// re-prompts after the user grants access once.
-func fetchEvents(ctx context.Context, cals []string, days int) ([]providers.Event, error) {
-	cctx, cancel := context.WithTimeout(ctx, 25*time.Second)
-	defer cancel()
-
-	script := buildScript(cals, days)
-	out, err := exec.CommandContext(cctx, "/usr/bin/osascript", "-e", script).Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return nil, fmt.Errorf("osascript: %s", strings.TrimSpace(string(exitErr.Stderr)))
-		}
-		return nil, err
-	}
-	return parseEvents(string(out)), nil
-}
-
-// buildScript composes the AppleScript that emits one line per event:
-//
-//	START_ISO|END_ISO|ALL_DAY|CALENDAR|TITLE|LOCATION
-//
-// Using a delimiter that's vanishingly unlikely to appear in a meeting
-// title ('|') keeps parsing trivial; commas / tabs would collide with
-// event names like "Q1, Q2 planning".
-func buildScript(cals []string, days int) string {
-	// Build the calendar filter as an AppleScript list literal.
-	var filter string
-	if len(cals) > 0 {
-		quoted := make([]string, len(cals))
-		for i, c := range cals {
-			quoted[i] = `"` + escapeAS(c) + `"`
-		}
-		filter = fmt.Sprintf("set wanted to {%s}\n", strings.Join(quoted, ", "))
-	} else {
-		filter = "set wanted to {}\n"
-	}
-
-	return filter + fmt.Sprintf(`
-set fromDate to (current date) - (5 * minutes)
-set toDate to (current date) + (%d * days)
-set out to ""
-
-tell application "Calendar"
-  repeat with c in calendars
-    set cn to name of c
-    if (count of wanted) = 0 or wanted contains cn then
-      set evs to (every event of c whose start date is greater than or equal to fromDate and start date is less than or equal to toDate)
-      repeat with e in evs
-        set sd to start date of e
-        set ed to end date of e
-        set ad to (allday event of e)
-        try
-          set tt to summary of e
-        on error
-          set tt to ""
-        end try
-        try
-          set ll to location of e
-          if ll is missing value then set ll to ""
-        on error
-          set ll to ""
-        end try
-        set out to out & (my isoDate(sd)) & "|" & (my isoDate(ed)) & "|" & ad & "|" & cn & "|" & tt & "|" & ll & linefeed
-      end repeat
-    end if
-  end repeat
-end tell
-
-return out
-
-on isoDate(d)
-  set y to year of d
-  set m to (month of d as integer)
-  set dd to day of d
-  set hh to hours of d
-  set mm to minutes of d
-  set ss to seconds of d
-  return (my pad(y, 4)) & "-" & (my pad(m, 2)) & "-" & (my pad(dd, 2)) & "T" & (my pad(hh, 2)) & ":" & (my pad(mm, 2)) & ":" & (my pad(ss, 2))
-end isoDate
-
-on pad(n, w)
-  set s to (n as text)
-  repeat while length of s < w
-    set s to "0" & s
-  end repeat
-  return s
-end pad
-`, days)
-}
-
-func parseEvents(raw string) []providers.Event {
-	// Dedupe by (start, title). AppleScript's `every event` query can
-	// emit the same event multiple times when a recurring series has been
-	// expanded server-side and the parent rule is also returned — and
-	// users frequently end up with the same event invite mirrored across
-	// two calendars (personal + work). Either way the right move is to
-	// collapse identical (start, title) pairs.
-	seen := make(map[string]struct{})
-	var out []providers.Event
-
-	sc := bufio.NewScanner(strings.NewReader(raw))
-	// Calendar.app can dump events with very long location strings —
-	// 64KiB is the default Scanner limit and we've already overflowed it.
-	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := strings.TrimRight(sc.Text(), "\r")
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "|", 6)
-		if len(parts) < 6 {
-			continue
-		}
-		start := parseLocalISO(parts[0])
-		if start.IsZero() {
-			continue
-		}
-		title := strings.TrimSpace(parts[4])
-		key := start.Format(time.RFC3339) + "|" + strings.ToLower(title)
-		if _, dup := seen[key]; dup {
-			continue
-		}
-		seen[key] = struct{}{}
-
-		end := parseLocalISO(parts[1])
-		allDay := strings.EqualFold(strings.TrimSpace(parts[2]), "true")
-		out = append(out, providers.Event{
-			Start:    start,
-			End:      end,
-			Title:    title,
-			Location: strings.TrimSpace(parts[5]),
-			AllDay:   allDay,
-		})
-	}
-	return out
-}
-
-// parseLocalISO parses our YYYY-MM-DDTHH:MM:SS strings as the user's
-// local time — AppleScript dates are unzoned, and "wall clock in local
-// tz" is exactly what we want for displaying meeting times.
-func parseLocalISO(s string) time.Time {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return time.Time{}
-	}
-	t, err := time.ParseInLocation("2006-01-02T15:04:05", s, time.Local)
-	if err != nil {
-		return time.Time{}
-	}
-	return t
-}
-
 func describeErr(err error) string {
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "not authorized"), strings.Contains(msg, "denied"):
-		return "macOS Calendar access denied — grant in System Settings → Privacy → Calendars"
-	case strings.Contains(msg, "Application isn’t running"), strings.Contains(msg, "Application isn't running"):
-		return "open Calendar.app once so it can start syncing"
+		return "Calendar access denied — System Settings → Privacy → Calendars"
+	case strings.Contains(msg, "no calendar"):
+		return "no matching calendar (check [maccal].calendars in config)"
 	}
 	if len(msg) > 80 {
 		msg = msg[:77] + "…"
 	}
 	return msg
-}
-
-func escapeAS(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), `"`, `\"`)
 }
