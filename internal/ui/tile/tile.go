@@ -137,7 +137,7 @@ func windowLines(w providers.Window, inner int) []string {
 func formatValue(u providers.Unit, v float64) string {
 	switch u {
 	case providers.UnitUSD:
-		return fmt.Sprintf("$%.2f", v)
+		return formatUSD(v)
 	case providers.UnitTokens:
 		return humanTokens(int64(v))
 	case providers.UnitPercent:
@@ -147,17 +147,50 @@ func formatValue(u providers.Unit, v float64) string {
 	}
 }
 
-func breakdownLine(b providers.BreakdownEntry, inner int) string {
-	label := labelStyle.Render(padRight(clip(b.Label, inner-12), inner-12))
-	val := ""
-	switch b.Unit {
-	case providers.UnitUSD:
-		val = fmt.Sprintf("$%.2f", b.Value)
-	case providers.UnitTokens:
-		val = humanTokens(int64(b.Value))
-	default:
-		val = fmt.Sprintf("%.0f", b.Value)
+// formatUSD adds thousand separators: 1234.5 → "$1,234.50".
+func formatUSD(v float64) string {
+	neg := v < 0
+	if neg {
+		v = -v
 	}
+	whole := int64(v)
+	cents := int64((v-float64(whole))*100 + 0.5)
+	if cents == 100 {
+		whole++
+		cents = 0
+	}
+	// Group digits in threes from the right.
+	in := fmt.Sprintf("%d", whole)
+	n := len(in)
+	if n <= 3 {
+		if neg {
+			return fmt.Sprintf("-$%s.%02d", in, cents)
+		}
+		return fmt.Sprintf("$%s.%02d", in, cents)
+	}
+	var b strings.Builder
+	first := n % 3
+	if first == 0 {
+		first = 3
+	}
+	b.WriteString(in[:first])
+	for i := first; i < n; i += 3 {
+		b.WriteByte(',')
+		b.WriteString(in[i : i+3])
+	}
+	if neg {
+		return fmt.Sprintf("-$%s.%02d", b.String(), cents)
+	}
+	return fmt.Sprintf("$%s.%02d", b.String(), cents)
+}
+
+func breakdownLine(b providers.BreakdownEntry, inner int) string {
+	val := formatValue(b.Unit, b.Value)
+	labelW := inner - lipgloss.Width(val) - 1
+	if labelW < 1 {
+		labelW = 1
+	}
+	label := labelStyle.Render(padRight(clip(b.Label, labelW), labelW))
 	return label + " " + val
 }
 
@@ -184,22 +217,24 @@ func statCell(b providers.BreakdownEntry, w int) string {
 }
 
 // histogram renders a multi-row bar chart spanning the full inner width.
-// Each day gets one column (or a fractional column when there are more
-// days than columns); column height uses 8-step block-quadrant precision
-// (▁▂▃▄▅▆▇█) so a 6-row chart effectively has 48 levels of resolution.
+// Each data point is stretched horizontally to fill the available columns
+// (so 30 days across a 60-col tile becomes 2 cols/day). Bar heights use
+// 8-step block-quadrant precision (▁▂▃▄▅▆▇█), giving rows×8 levels of
+// vertical resolution.
 func histogram(points []providers.HistoryPoint, inner int) string {
-	if len(points) == 0 || inner < 4 {
+	if len(points) == 0 || inner < len(points) {
 		return ""
 	}
 	const rows = 6
-	const subSteps = 8 // ▁..█
+	const subSteps = 8
 
-	// One column per day, padded with leading dots if the window is wider
-	// than the data so the chart still spans full width.
-	cols := inner
-	leading := 0
-	if cols > len(points) {
-		leading = cols - len(points)
+	// Stretch points to fill the width: each point gets perPoint columns,
+	// with any leftover columns distributed to the left so the right edge
+	// (today) lands flush against the tile edge.
+	perPoint := inner / len(points)
+	extra := inner - perPoint*len(points)
+	if perPoint < 1 {
+		perPoint = 1
 	}
 
 	maxV := 0.0
@@ -209,43 +244,41 @@ func histogram(points []providers.HistoryPoint, inner int) string {
 		}
 	}
 
-	// Pick a heatmap color per column (cooler at low utilization, warmer
-	// at high). All columns in one row get rendered as a single string for
-	// a given color so each row is built up by iterating columns.
 	bars := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
 
 	type col struct {
-		fillRows int  // full ▌ rows
-		topRune  rune // partial top rune ('' if none)
+		fillRows int
+		topRune  rune
 		empty    bool
 	}
-	colData := make([]col, cols)
-	for i := 0; i < cols; i++ {
-		if i < leading {
-			colData[i] = col{empty: true}
-			continue
-		}
-		p := points[i-leading]
+	colData := make([]col, 0, inner)
+	for i, p := range points {
+		c := col{}
 		if maxV == 0 || p.Value <= 0 {
-			colData[i] = col{empty: true}
-			continue
+			c.empty = true
+		} else {
+			levels := int((p.Value / maxV) * float64(rows*subSteps))
+			if levels < 1 {
+				levels = 1
+			}
+			c.fillRows = levels / subSteps
+			partial := levels % subSteps
+			if partial > 0 && c.fillRows < rows {
+				c.topRune = bars[partial-1]
+			}
 		}
-		levels := int((p.Value / maxV) * float64(rows*subSteps))
-		if levels < 1 {
-			levels = 1
+		// First `extra` points get one extra column so we fill exactly.
+		width := perPoint
+		if i < extra {
+			width++
 		}
-		full := levels / subSteps
-		partial := levels % subSteps
-		var top rune
-		if partial > 0 && full < rows {
-			top = bars[partial-1]
+		for j := 0; j < width; j++ {
+			colData = append(colData, c)
 		}
-		colData[i] = col{fillRows: full, topRune: top}
 	}
 
 	rowStrs := make([]string, rows)
 	for r := 0; r < rows; r++ {
-		// Top row corresponds to the highest visual position (rows-1).
 		rowFromBottom := rows - 1 - r
 		var b strings.Builder
 		for _, c := range colData {
@@ -266,9 +299,11 @@ func histogram(points []providers.HistoryPoint, inner int) string {
 }
 
 func renderBar(w providers.Window, inner int) string {
+	// Bars span the full inner width — anything narrower wastes the room
+	// the tile already reserves.
 	width := inner
-	if width > barWidth*2 {
-		width = barWidth * 2
+	if width < 8 {
+		width = 8
 	}
 	switch {
 	case w.Limit > 0:
