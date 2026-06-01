@@ -151,43 +151,35 @@ func (p *Provider) localCostWindows(agg aggregate, sessionStart, sessionReset, d
 }
 
 func (p *Provider) realQuotaWindows(u *oauthUsage, now time.Time) []providers.Window {
-	// Weekly-tier sub-windows share the overall weekly reset when the API
-	// returns them as null (which happens at 0% utilization on Max plans).
+	// Enterprise responses null-out the standard quota keys and put the
+	// real company-level cap in extra_usage. Detect that case and render
+	// a different window set rather than five empty bars.
+	if u.isEnterpriseShape() {
+		return p.enterpriseWindows(u, now)
+	}
+	return p.maxPlanWindows(u, now)
+}
+
+// isEnterpriseShape reports whether all of the standard Max-plan quota
+// windows are null — the signal that this is an Admin-API-billed account.
+func (u *oauthUsage) isEnterpriseShape() bool {
+	return u.FiveHour == nil && u.SevenDay == nil &&
+		u.SevenDayOpus == nil && u.SevenDaySonnet == nil
+}
+
+func (p *Provider) maxPlanWindows(u *oauthUsage, now time.Time) []providers.Window {
 	weeklyReset := time.Time{}
 	if u.SevenDay != nil {
 		weeklyReset = u.SevenDay.Reset()
 	}
 
-	mk := func(label string, w *oauthWindow, sharedReset time.Time, hours float64) providers.Window {
-		used := 0.0
-		reset := sharedReset
-		if w != nil {
-			used = w.Utilization
-			if r := w.Reset(); !r.IsZero() {
-				reset = r
-			}
-		}
-		start := time.Time{}
-		if !reset.IsZero() && hours > 0 {
-			start = reset.Add(-time.Duration(hours) * time.Hour)
-		}
-		return providers.Window{
-			Label:    label,
-			Used:     used,
-			Limit:    100,
-			Unit:     providers.UnitPercent,
-			Start:    start,
-			ResetsAt: reset,
-		}
-	}
-
 	out := []providers.Window{
-		mk("5h session", u.FiveHour, time.Time{}, 5),
-		mk("Weekly", u.SevenDay, time.Time{}, 24*7),
-		mk("Weekly Opus", u.SevenDayOpus, weeklyReset, 24*7),
-		mk("Weekly Sonnet", u.SevenDaySonnet, weeklyReset, 24*7),
-		mk("Routines", u.SevenDayRoutines, weeklyReset, 24*7),
-		mk("OAuth apps", u.SevenDayOAuthApps, weeklyReset, 24*7),
+		mkPercent("5h session", u.FiveHour, time.Time{}, 5),
+		mkPercent("Weekly", u.SevenDay, time.Time{}, 24*7),
+		mkPercent("Weekly Opus", u.SevenDayOpus, weeklyReset, 24*7),
+		mkPercent("Weekly Sonnet", u.SevenDaySonnet, weeklyReset, 24*7),
+		mkPercent("Routines", u.SevenDayRoutines, weeklyReset, 24*7),
+		mkPercent("OAuth apps", u.SevenDayOAuthApps, weeklyReset, 24*7),
 	}
 	if u.ExtraUsage != nil && u.ExtraUsage.IsEnabled {
 		out = append(out, providers.Window{
@@ -198,17 +190,87 @@ func (p *Provider) realQuotaWindows(u *oauthUsage, now time.Time) []providers.Wi
 			ResetsAt: monthEnd(now),
 		})
 	}
+	out = append(out, p.promoWindows(u)...)
 
-	// Drop only windows the API neither populated nor implied (no reset,
-	// no usage signal).
-	filtered := out[:0]
-	for _, w := range out {
-		if w.ResetsAt.IsZero() && w.Used == 0 {
+	return dropEmpty(out)
+}
+
+func (p *Provider) enterpriseWindows(u *oauthUsage, now time.Time) []providers.Window {
+	out := []providers.Window{}
+	if u.ExtraUsage != nil && u.ExtraUsage.IsEnabled && u.ExtraUsage.MonthlyLimit > 0 {
+		// extra_usage stores used_credits in cents (e.g. 693 = $6.93). The
+		// utilization field already accounts for that, so it's our source
+		// of truth for the bar; we just need a nice $X / $Y label.
+		used := u.ExtraUsage.UsedCredits / 100.0
+		limit := u.ExtraUsage.MonthlyLimit / 100.0
+		out = append(out, providers.Window{
+			Label:    "Monthly spend",
+			Used:     used,
+			Limit:    limit,
+			Unit:     providers.UnitUSD,
+			ResetsAt: monthEnd(now),
+		})
+	}
+	out = append(out, p.promoWindows(u)...)
+	return dropEmpty(out)
+}
+
+// promoWindows surfaces any of Anthropic's codenamed promo / experimental
+// quota windows that came back with non-nil data. Labels are kept
+// lowercase to make it clear they're not first-class plan limits.
+func (p *Provider) promoWindows(u *oauthUsage) []providers.Window {
+	candidates := []struct {
+		label string
+		w     *oauthWindow
+	}{
+		{"promo (omelette)", u.OmelettePromotional},
+		{"7d omelette", u.SevenDayOmelette},
+		{"7d cowork", u.SevenDayCowork},
+		{"iguana_necktie", u.IguanaNecktie},
+		{"tangelo", u.Tangelo},
+	}
+	out := make([]providers.Window, 0, len(candidates))
+	for _, c := range candidates {
+		if c.w == nil {
 			continue
 		}
-		filtered = append(filtered, w)
+		out = append(out, mkPercent(c.label, c.w, time.Time{}, 0))
 	}
-	return filtered
+	return out
+}
+
+func mkPercent(label string, w *oauthWindow, sharedReset time.Time, hours float64) providers.Window {
+	used := 0.0
+	reset := sharedReset
+	if w != nil {
+		used = w.Utilization
+		if r := w.Reset(); !r.IsZero() {
+			reset = r
+		}
+	}
+	start := time.Time{}
+	if !reset.IsZero() && hours > 0 {
+		start = reset.Add(-time.Duration(hours) * time.Hour)
+	}
+	return providers.Window{
+		Label:    label,
+		Used:     used,
+		Limit:    100,
+		Unit:     providers.UnitPercent,
+		Start:    start,
+		ResetsAt: reset,
+	}
+}
+
+func dropEmpty(in []providers.Window) []providers.Window {
+	out := in[:0]
+	for _, w := range in {
+		if w.ResetsAt.IsZero() && w.Used == 0 && w.Limit == 0 {
+			continue
+		}
+		out = append(out, w)
+	}
+	return out
 }
 
 func monthEnd(now time.Time) time.Time {

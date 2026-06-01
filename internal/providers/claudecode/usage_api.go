@@ -50,14 +50,28 @@ type oauthExtraUsage struct {
 }
 
 // oauthUsage is the full response from /api/oauth/usage.
+//
+// Schema varies by plan tier:
+//   - Max plans → five_hour / seven_day / seven_day_opus / seven_day_sonnet
+//     are populated; extra_usage may be present for top-up credits.
+//   - Enterprise → standard window keys are null; the monthly company cap
+//     lives in extra_usage (monthly_limit + used_credits). Anthropic also
+//     occasionally returns promo windows under codenames like
+//     omelette_promotional / iguana_necktie / tangelo — pulse renders any
+//     with a non-zero utilization.
 type oauthUsage struct {
-	FiveHour          *oauthWindow     `json:"five_hour"`
-	SevenDay          *oauthWindow     `json:"seven_day"`
-	SevenDayOpus      *oauthWindow     `json:"seven_day_opus"`
-	SevenDaySonnet    *oauthWindow     `json:"seven_day_sonnet"`
-	SevenDayRoutines  *oauthWindow     `json:"seven_day_routines"`
-	SevenDayOAuthApps *oauthWindow     `json:"seven_day_oauth_apps"`
-	ExtraUsage        *oauthExtraUsage `json:"extra_usage"`
+	FiveHour            *oauthWindow     `json:"five_hour"`
+	SevenDay            *oauthWindow     `json:"seven_day"`
+	SevenDayOpus        *oauthWindow     `json:"seven_day_opus"`
+	SevenDaySonnet      *oauthWindow     `json:"seven_day_sonnet"`
+	SevenDayRoutines    *oauthWindow     `json:"seven_day_routines"`
+	SevenDayOAuthApps   *oauthWindow     `json:"seven_day_oauth_apps"`
+	SevenDayOmelette    *oauthWindow     `json:"seven_day_omelette"`
+	SevenDayCowork      *oauthWindow     `json:"seven_day_cowork"`
+	OmelettePromotional *oauthWindow     `json:"omelette_promotional"`
+	IguanaNecktie       *oauthWindow     `json:"iguana_necktie"`
+	Tangelo             *oauthWindow     `json:"tangelo"`
+	ExtraUsage          *oauthExtraUsage `json:"extra_usage"`
 }
 
 // errOAuthUnauthorized means the token is rejected — almost always expired.

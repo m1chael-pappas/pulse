@@ -124,23 +124,22 @@ func (a App) View() string {
 		return "loading pulse…"
 	}
 
-	const cols = 2
-	const helpRows = 2
+	// Lay out in up to 2 columns, but stop adding a column once a tile is
+	// narrower than ~38 cols — that's the threshold where the breakdown
+	// row stops fitting cleanly.
+	cols := 2
+	if a.width < 80 || len(a.providers) == 1 {
+		cols = 1
+	}
 	rows := (len(a.providers) + cols - 1) / cols
 	if rows < 1 {
 		rows = 1
 	}
-	gap := 1
-	tileW := (a.width - gap*(cols-1)) / cols
-	tileH := (a.height - helpRows) / rows
-	if tileW < 24 {
-		tileW = 24
+
+	tileW := a.width / cols
+	if tileW < 38 {
+		tileW = 38
 	}
-	if tileH < 8 {
-		tileH = 8
-	}
-	contentW := tileW - 4 // border + padding
-	contentH := tileH - 2
 
 	tiles := make([]string, len(a.providers))
 	for i, snap := range a.snapshots {
@@ -151,7 +150,9 @@ func (a App) View() string {
 				Note:   "loading…",
 			}
 		}
-		tiles[i] = tile.Render(snap, contentW, contentH, i == a.focus)
+		// Natural height — let the tile size to its content rather than
+		// stretching to fill the terminal.
+		tiles[i] = tile.Render(snap, tileW, 0, i == a.focus)
 	}
 
 	var rowsView []string

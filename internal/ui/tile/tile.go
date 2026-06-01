@@ -16,6 +16,15 @@ import (
 
 const barWidth = 18
 
+// Render lays out a snapshot inside a bordered box.
+//
+// Sizing rules:
+//   - width  is honored exactly (so adjacent tiles in a grid align).
+//   - height ≤ 0 → the tile sizes to its content (no trailing blank rows).
+//   - height > 0 → tile is padded or truncated to that height.
+//
+// The natural-height mode is what you want when a tile holds genuinely
+// variable content; the fixed-height mode is for symmetrical grids.
 func Render(snap providers.Snapshot, width, height int, focused bool) string {
 	border := borderStyle
 	if focused {
@@ -26,9 +35,29 @@ func Render(snap providers.Snapshot, width, height int, focused bool) string {
 		inner = 20
 	}
 
-	lines := []string{
-		headerRow(snap, inner),
+	lines := buildLines(snap, inner)
+	body := lipgloss.JoinVertical(lipgloss.Left, lines...)
+
+	style := border.Width(width)
+	if height > 0 {
+		style = style.Height(height)
 	}
+	return style.Render(body)
+}
+
+// NaturalHeight returns the line count Render would produce for a snapshot
+// at the given width, including the two border rows. Callers in a flex
+// layout can use this to size each tile to its content.
+func NaturalHeight(snap providers.Snapshot, width int) int {
+	inner := width - 4
+	if inner < 20 {
+		inner = 20
+	}
+	return len(buildLines(snap, inner)) + 2 // top + bottom border
+}
+
+func buildLines(snap providers.Snapshot, inner int) []string {
+	lines := []string{headerRow(snap, inner)}
 	if snap.Subtitle != "" {
 		lines = append(lines, subtitleStyle.Render(clip(snap.Subtitle, inner)))
 	}
@@ -58,9 +87,7 @@ func Render(snap providers.Snapshot, width, height int, focused bool) string {
 	if snap.Note != "" {
 		lines = append(lines, "", noteStyle.Render(clip(snap.Note, inner)))
 	}
-
-	body := lipgloss.JoinVertical(lipgloss.Left, lines...)
-	return border.Width(width).Height(height).Render(body)
+	return lines
 }
 
 func headerRow(snap providers.Snapshot, inner int) string {
