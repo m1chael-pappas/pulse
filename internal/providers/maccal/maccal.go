@@ -113,25 +113,19 @@ func findIcalBuddy() (string, error) {
 	return "", errors.New("icalBuddy not on PATH (brew install ical-buddy)")
 }
 
-// fetchEvents runs icalBuddy and parses its bullet-delimited output.
-//
-// We use `-b` to control the bullet, `-ps` for "no separator" (single
-// space) between item parts, and `-iep` to choose which event properties
-// to dump in a known order. icalBuddy's `eventsToday+N` window covers
-// today plus N more days and crucially expands recurring events.
+// fetchEvents runs icalBuddy with sensible defaults and parses its
+// standard bullet-prefixed output. icalBuddy's `eventsToday+N` window
+// covers today plus N more days and (crucially, unlike AppleScript)
+// expands recurring events into their occurrences.
 func fetchEvents(ctx context.Context, bin string, cals []string, days int) ([]providers.Event, error) {
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	args := []string{
-		"-nc",                              // no calendar names header
-		"-npn",                             // no property names
-		"-eep", "notes,attendees,url",      // exclude noisy props
-		"-iep", "title,datetime,location",  // include only these
-		"-b", "@@EVENT@@",                  // unique bullet so events split cleanly
-		"-ps", "| @@FIELD@@ |",             // property separator
-		"-df", "%Y-%m-%d",                  // ISO dates
-		"-tf", "%H:%M",                     // 24h times
+		"-nc",                                                 // no calendar header line
+		"-eep", "notes,attendees,url,uid,phone,description",   // suppress huge fields
+		"-df", "%Y-%m-%d",
+		"-tf", "%H:%M",
 	}
 	if len(cals) > 0 {
 		args = append(args, "-ic", strings.Join(cals, ","))
@@ -149,26 +143,32 @@ func fetchEvents(ctx context.Context, bin string, cals []string, days int) ([]pr
 	return parseIcalBuddy(string(out)), nil
 }
 
-// parseIcalBuddy parses our bullet-delimited icalBuddy output. Each event
-// looks like:
+// parseIcalBuddy parses icalBuddy's default output, which looks like:
 //
-//	@@EVENT@@ Standup
-//	    | @@FIELD@@ | 2026-06-01 at 12:30 - 13:00
-//	    | @@FIELD@@ | Sydney-G-Ground
+//	• Web team standup (michael.pappas@safetyculture.io)
+//	    location: Sydney-2-MEET 2.05 (3) [Zoom]
+//	    today at 09:45 - 10:00
+//	• Sprint kick-off (michael.pappas@safetyculture.io)
+//	    location: ...
+//	    2026-06-02 at 10:00 - 11:00
 //
-// We split on @@EVENT@@ to get one chunk per event, then walk lines to
-// extract title (the first line) and parse the datetime line.
+// Bullet character is `•` (U+2022). Property lines are indented and
+// either start with `<name>: <value>` or are the date/time line which
+// has no property name. The date can be a literal date (YYYY-MM-DD) or
+// the words "today" / "tomorrow".
 func parseIcalBuddy(raw string) []providers.Event {
+	const bullet = "•"
 	seen := make(map[string]struct{})
 	var out []providers.Event
 
-	chunks := strings.Split(raw, "@@EVENT@@")
-	for _, chunk := range chunks {
-		chunk = strings.TrimSpace(chunk)
-		if chunk == "" {
+	// Split on the bullet character. Every chunk after the first is one
+	// event; the first is whatever came before the first bullet (header).
+	chunks := strings.Split(raw, bullet)
+	for i, chunk := range chunks {
+		if i == 0 {
 			continue
 		}
-		title, datetimeLine, location := splitChunk(chunk)
+		title, datetimeLine, location := splitEventBlock(chunk)
 		start, end, allDay := parseDateTime(datetimeLine)
 		if start.IsZero() {
 			continue
@@ -189,82 +189,155 @@ func parseIcalBuddy(raw string) []providers.Event {
 	return out
 }
 
-func splitChunk(chunk string) (title, datetime, location string) {
+// splitEventBlock extracts (title, datetime line, location) from one
+// bullet's worth of icalBuddy output.
+//
+// Title is the first non-empty line, with the trailing " (calendar)"
+// suffix stripped. Property lines are indented and use "name: value";
+// the date/time line has no name.
+func splitEventBlock(chunk string) (title, datetime, location string) {
 	sc := bufio.NewScanner(strings.NewReader(chunk))
-	sc.Buffer(make([]byte, 64*1024), 1<<20)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	first := true
 	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
+		line := sc.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
 			continue
 		}
 		if first {
-			title = line
+			title = stripCalendarSuffix(trimmed)
 			first = false
 			continue
 		}
-		// Property lines are "| @@FIELD@@ | value"
-		const sep = "| @@FIELD@@ |"
-		if i := strings.Index(line, sep); i >= 0 {
-			value := strings.TrimSpace(line[i+len(sep):])
-			switch {
-			case looksLikeDateTime(value):
-				datetime = value
-			default:
-				if location == "" {
-					location = value
-				}
+		// Only indented lines are properties of the current event; an
+		// un-indented line that somehow appears here would belong to the
+		// next chunk and we shouldn't have entered this branch.
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			continue
+		}
+		if name, value, ok := splitProperty(trimmed); ok {
+			switch strings.ToLower(name) {
+			case "location":
+				location = value
 			}
+			continue
+		}
+		// Property line without "name:" prefix = the date/time row.
+		if datetime == "" && looksLikeDateTime(trimmed) {
+			datetime = trimmed
 		}
 	}
 	return
 }
 
+func splitProperty(line string) (name, value string, ok bool) {
+	// icalBuddy property names are short (location, attendees, notes…).
+	// Cap the lookahead so values containing ":" (URLs, timestamps) don't
+	// trick us into treating part of the value as a key.
+	limit := 32
+	if len(line) < limit {
+		limit = len(line)
+	}
+	for i := 0; i < limit; i++ {
+		c := line[i]
+		if c == ':' {
+			name = line[:i]
+			value = strings.TrimSpace(line[i+1:])
+			// A real property name is all letters and underscores.
+			for _, r := range name {
+				if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_') {
+					return "", "", false
+				}
+			}
+			return name, value, true
+		}
+	}
+	return "", "", false
+}
+
+func stripCalendarSuffix(s string) string {
+	// icalBuddy appends " (calendar name)" to each title. Strip the LAST
+	// parenthesised group only, since titles legitimately contain "(...)"
+	// (e.g. "Sprint showcase (+AI) & retro").
+	end := strings.LastIndex(s, "(")
+	if end < 1 || !strings.HasSuffix(s, ")") {
+		return s
+	}
+	return strings.TrimSpace(s[:end])
+}
+
 func looksLikeDateTime(s string) bool {
-	return len(s) >= 10 && (s[4] == '-' || strings.Contains(s, " at "))
+	if strings.HasPrefix(strings.ToLower(s), "today") ||
+		strings.HasPrefix(strings.ToLower(s), "tomorrow") {
+		return true
+	}
+	return len(s) >= 10 && s[4] == '-' && s[7] == '-'
 }
 
 // parseDateTime handles icalBuddy's date/time formats:
 //
-//	2026-06-01 at 12:30 - 13:00              (today / single-day)
-//	2026-06-01 at 12:30 - 2026-06-02 at 13:00 (multi-day)
-//	2026-06-01                               (all-day)
-//	today at 12:30 - 13:00                   (relative — we asked for ISO so unusual)
+//	today at 09:45 - 10:00                    (today, timed)
+//	tomorrow at 14:00 - 15:00                 (tomorrow, timed)
+//	2026-06-04 at 12:30 - 13:00               (specific day)
+//	2026-06-04 at 12:30 - 2026-06-05 at 13:00 (multi-day)
+//	2026-06-04                                (all-day)
 func parseDateTime(s string) (start, end time.Time, allDay bool) {
 	if s == "" {
 		return
 	}
-
-	// Multi-day case has " - " between two complete "<date> at <time>"
-	// fragments; single-day has just " - <time>".
+	now := time.Now()
 	if i := strings.Index(s, " - "); i >= 0 {
 		left := strings.TrimSpace(s[:i])
 		right := strings.TrimSpace(s[i+3:])
-		start = parseFragment(left, time.Time{})
-		end = parseFragment(right, start)
+		start = parseFragment(left, time.Time{}, now)
+		end = parseFragment(right, start, now)
 		allDay = !strings.Contains(left, " at ")
 		return
 	}
-	start = parseFragment(strings.TrimSpace(s), time.Time{})
+	start = parseFragment(strings.TrimSpace(s), time.Time{}, now)
 	allDay = !strings.Contains(s, " at ")
 	return
 }
 
-// parseFragment turns "2026-06-01 at 12:30" or "12:30" or "2026-06-01"
-// into a local time. For a bare "12:30" we borrow the date from the start
-// time of the same event (handed in as base).
-func parseFragment(s string, base time.Time) time.Time {
-	if strings.Contains(s, " at ") {
-		t, err := time.ParseInLocation("2006-01-02 at 15:04", s, time.Local)
+// parseFragment turns one half of an icalBuddy date range into a local
+// time. Accepts:
+//
+//	"today at 09:45" / "tomorrow at 14:00"
+//	"2026-06-04 at 12:30"
+//	"2026-06-04"        (all-day)
+//	"12:30"             (bare time — borrowed date from base)
+func parseFragment(s string, base, now time.Time) time.Time {
+	low := strings.ToLower(s)
+	switch {
+	case strings.HasPrefix(low, "today at "):
+		t, err := time.ParseInLocation("15:04", strings.TrimPrefix(s, "today at "), time.Local)
 		if err != nil {
 			return time.Time{}
 		}
-		return t
+		return time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), 0, 0, time.Local)
+	case strings.HasPrefix(low, "tomorrow at "):
+		t, err := time.ParseInLocation("15:04", strings.TrimPrefix(s, "tomorrow at "), time.Local)
+		if err != nil {
+			return time.Time{}
+		}
+		tomorrow := now.AddDate(0, 0, 1)
+		return time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), t.Hour(), t.Minute(), 0, 0, time.Local)
+	case low == "today":
+		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.Local)
+	case low == "tomorrow":
+		tomorrow := now.AddDate(0, 0, 1)
+		return time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 0, 0, time.Local)
+	}
+	if strings.Contains(s, " at ") {
+		if t, err := time.ParseInLocation("2006-01-02 at 15:04", s, time.Local); err == nil {
+			return t
+		}
+		return time.Time{}
 	}
 	if t, err := time.ParseInLocation("2006-01-02", s, time.Local); err == nil {
 		return t
 	}
-	// Bare time — combine with the date from the base.
 	if t, err := time.ParseInLocation("15:04", s, time.Local); err == nil && !base.IsZero() {
 		return time.Date(base.Year(), base.Month(), base.Day(), t.Hour(), t.Minute(), 0, 0, time.Local)
 	}
