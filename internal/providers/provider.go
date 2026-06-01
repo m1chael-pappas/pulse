@@ -68,6 +68,14 @@ type Event struct {
 	AllDay   bool
 }
 
+// Section is a free-form labelled list of rows. Tiles use this for
+// content that doesn't fit Windows / Stats / Breakdown — e.g. a list of
+// open PRs grouped by "authored" vs "review queue".
+type Section struct {
+	Title string
+	Rows  []BreakdownEntry
+}
+
 // Snapshot is the point-in-time state of a provider.
 type Snapshot struct {
 	Name      string
@@ -77,6 +85,7 @@ type Snapshot struct {
 	CostUSD   float64
 	Windows   []Window
 	Events    []Event          // optional — upcoming calendar events
+	Sections  []Section        // optional — labelled lists of rows
 	Breakdown []BreakdownEntry // optional — "where the cost came from"
 	History   []HistoryPoint   // optional — daily cost histogram
 	Stats     []BreakdownEntry // optional — labelled stat grid (Today / 30d / etc)

@@ -12,6 +12,7 @@ import (
 	"github.com/michaelpappas/pulse/internal/providers"
 	"github.com/michaelpappas/pulse/internal/providers/claudecode"
 	"github.com/michaelpappas/pulse/internal/providers/gcal"
+	"github.com/michaelpappas/pulse/internal/providers/github"
 	"github.com/michaelpappas/pulse/internal/providers/maccal"
 	"github.com/michaelpappas/pulse/internal/providers/system"
 	"github.com/michaelpappas/pulse/internal/ui/tile"
@@ -32,6 +33,9 @@ func NewApp(cfg config.Config) App {
 		cfg.ClaudeCode.MonthBudget,
 	)
 	provs := []providers.Provider{cc, system.New()}
+	if cfg.GitHub.Enabled {
+		provs = append(provs, github.New(cfg.GitHub.Limit))
+	}
 	switch {
 	case cfg.MacCal.Enabled:
 		provs = append(provs, maccal.New(cfg.MacCal.Calendars, cfg.MacCal.Lookahead, cfg.MacCal.LookaheadDays))

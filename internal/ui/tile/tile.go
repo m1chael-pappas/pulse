@@ -72,6 +72,12 @@ func buildLines(snap providers.Snapshot, inner int) []string {
 		if len(snap.Events) > 0 {
 			lines = append(lines, eventLines(snap.Events, inner)...)
 		}
+		for _, section := range snap.Sections {
+			lines = append(lines, "", labelStyle.Render(section.Title))
+			for _, row := range section.Rows {
+				lines = append(lines, breakdownLine(row, inner))
+			}
+		}
 		if len(snap.Stats) > 0 {
 			lines = append(lines, "", statsGrid(snap.Stats, inner))
 		}
@@ -149,8 +155,27 @@ func formatValue(u providers.Unit, v float64) string {
 		return fmt.Sprintf("%.1f GiB", v)
 	case providers.UnitCount:
 		return fmt.Sprintf("%.0f", v)
+	case "age":
+		return humanDuration(time.Duration(v) * time.Second)
 	default:
 		return fmt.Sprintf("%.2f", v)
+	}
+}
+
+// humanDuration formats a duration the way GitHub does in the UI:
+// "now", "12m", "3h", "5d", "2mo".
+func humanDuration(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours())/24)
+	default:
+		return fmt.Sprintf("%dmo", int(d.Hours())/(24*30))
 	}
 }
 

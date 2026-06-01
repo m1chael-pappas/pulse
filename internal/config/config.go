@@ -25,6 +25,14 @@ type Config struct {
 	ClaudeCode ClaudeCodeConfig `toml:"claudecode"`
 	GCal       GCalConfig       `toml:"gcal"`
 	MacCal     MacCalConfig     `toml:"maccal"`
+	GitHub     GitHubConfig     `toml:"github"`
+}
+
+// GitHubConfig configures the GitHub PR tile. Uses the `gh` CLI's auth
+// so no token belongs here.
+type GitHubConfig struct {
+	Enabled bool `toml:"enabled"`
+	Limit   int  `toml:"limit"`
 }
 
 // MacCalConfig configures the macOS Calendar.app provider. Works with any
@@ -151,4 +159,10 @@ lookahead_days = 7
 ics_url        = ""
 lookahead      = 6
 lookahead_days = 7
+
+[github]
+# Shows open PRs you authored + ones awaiting your review. Uses the
+# gh CLI's auth — run 'gh auth login' first if you haven't.
+enabled = true
+limit   = 5   # max PRs per section (yours / review queue)
 `
