@@ -61,6 +61,7 @@ func parseNoteMode(s string) NoteMode {
 
 func (p *Provider) Name() string             { return "Claude Code" }
 func (p *Provider) Interval() time.Duration  { return 30 * time.Second }
+func (p *Provider) PreferredWidth() int      { return 64 }
 
 func (p *Provider) root() string {
 	if p.Root != "" {
@@ -190,8 +191,6 @@ func (p *Provider) maxPlanWindows(u *oauthUsage, now time.Time) []providers.Wind
 			ResetsAt: monthEnd(now),
 		})
 	}
-	out = append(out, p.promoWindows(u)...)
-
 	return dropEmpty(out)
 }
 
@@ -211,32 +210,7 @@ func (p *Provider) enterpriseWindows(u *oauthUsage, now time.Time) []providers.W
 			ResetsAt: monthEnd(now),
 		})
 	}
-	out = append(out, p.promoWindows(u)...)
 	return dropEmpty(out)
-}
-
-// promoWindows surfaces any of Anthropic's codenamed promo / experimental
-// quota windows that came back with non-nil data. Labels are kept
-// lowercase to make it clear they're not first-class plan limits.
-func (p *Provider) promoWindows(u *oauthUsage) []providers.Window {
-	candidates := []struct {
-		label string
-		w     *oauthWindow
-	}{
-		{"promo (omelette)", u.OmelettePromotional},
-		{"7d omelette", u.SevenDayOmelette},
-		{"7d cowork", u.SevenDayCowork},
-		{"iguana_necktie", u.IguanaNecktie},
-		{"tangelo", u.Tangelo},
-	}
-	out := make([]providers.Window, 0, len(candidates))
-	for _, c := range candidates {
-		if c.w == nil {
-			continue
-		}
-		out = append(out, mkPercent(c.label, c.w, time.Time{}, 0))
-	}
-	return out
 }
 
 func mkPercent(label string, w *oauthWindow, sharedReset time.Time, hours float64) providers.Window {

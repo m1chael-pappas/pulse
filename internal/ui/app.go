@@ -124,24 +124,12 @@ func (a App) View() string {
 		return "loading pulse…"
 	}
 
-	// Lay out in up to 2 columns, but stop adding a column once a tile is
-	// narrower than ~38 cols — that's the threshold where the breakdown
-	// row stops fitting cleanly.
-	cols := 2
-	if a.width < 80 || len(a.providers) == 1 {
-		cols = 1
-	}
-	rows := (len(a.providers) + cols - 1) / cols
-	if rows < 1 {
-		rows = 1
-	}
-
-	tileW := a.width / cols
-	if tileW < 38 {
-		tileW = 38
-	}
-
+	// Each provider declares its own preferred width. We pack tiles
+	// left-to-right, wrapping when the next tile would overflow the
+	// terminal width. Tiles size to natural height so the layout reflects
+	// content, not the terminal's vertical extent.
 	tiles := make([]string, len(a.providers))
+	tileWidths := make([]int, len(a.providers))
 	for i, snap := range a.snapshots {
 		if snap.Name == "" {
 			snap = providers.Snapshot{
@@ -150,19 +138,28 @@ func (a App) View() string {
 				Note:   "loading…",
 			}
 		}
-		// Natural height — let the tile size to its content rather than
-		// stretching to fill the terminal.
-		tiles[i] = tile.Render(snap, tileW, 0, i == a.focus)
+		w := a.providers[i].PreferredWidth()
+		if w <= 0 || w > a.width {
+			w = a.width
+		}
+		tileWidths[i] = w
+		tiles[i] = tile.Render(snap, w, 0, i == a.focus)
 	}
 
 	var rowsView []string
-	for r := 0; r < rows; r++ {
-		start := r * cols
-		end := start + cols
-		if end > len(tiles) {
-			end = len(tiles)
+	var rowTiles []string
+	rowWidth := 0
+	for i, t := range tiles {
+		if rowWidth > 0 && rowWidth+tileWidths[i] > a.width {
+			rowsView = append(rowsView, lipgloss.JoinHorizontal(lipgloss.Top, rowTiles...))
+			rowTiles = nil
+			rowWidth = 0
 		}
-		rowsView = append(rowsView, lipgloss.JoinHorizontal(lipgloss.Top, tiles[start:end]...))
+		rowTiles = append(rowTiles, t)
+		rowWidth += tileWidths[i]
+	}
+	if len(rowTiles) > 0 {
+		rowsView = append(rowsView, lipgloss.JoinHorizontal(lipgloss.Top, rowTiles...))
 	}
 	grid := lipgloss.JoinVertical(lipgloss.Left, rowsView...)
 

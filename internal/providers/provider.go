@@ -73,8 +73,14 @@ type Snapshot struct {
 }
 
 // Provider is the contract every data feed implements.
+//
+// PreferredWidth returns the tile width this provider wants. Return 0 to
+// let the app pick (used for flexible tiles); return a fixed number when
+// the provider's content needs the room (e.g. the Claude tile renders a
+// 30-day histogram that's easier to read at >=64 cols).
 type Provider interface {
 	Name() string
 	Refresh(ctx context.Context) Snapshot
 	Interval() time.Duration
+	PreferredWidth() int
 }

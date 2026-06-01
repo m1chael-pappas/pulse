@@ -183,34 +183,86 @@ func statCell(b providers.BreakdownEntry, w int) string {
 	)
 }
 
+// histogram renders a multi-row bar chart spanning the full inner width.
+// Each day gets one column (or a fractional column when there are more
+// days than columns); column height uses 8-step block-quadrant precision
+// (▁▂▃▄▅▆▇█) so a 6-row chart effectively has 48 levels of resolution.
 func histogram(points []providers.HistoryPoint, inner int) string {
-	if len(points) == 0 {
+	if len(points) == 0 || inner < 4 {
 		return ""
 	}
-	bars := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+	const rows = 6
+	const subSteps = 8 // ▁..█
+
+	// One column per day, padded with leading dots if the window is wider
+	// than the data so the chart still spans full width.
+	cols := inner
+	leading := 0
+	if cols > len(points) {
+		leading = cols - len(points)
+	}
+
 	maxV := 0.0
 	for _, p := range points {
 		if p.Value > maxV {
 			maxV = p.Value
 		}
 	}
-	if maxV == 0 {
-		return labelStyle.Render(strings.Repeat("·", min(len(points), inner)))
+
+	// Pick a heatmap color per column (cooler at low utilization, warmer
+	// at high). All columns in one row get rendered as a single string for
+	// a given color so each row is built up by iterating columns.
+	bars := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+
+	type col struct {
+		fillRows int  // full ▌ rows
+		topRune  rune // partial top rune ('' if none)
+		empty    bool
 	}
-	step := 1
-	if len(points) > inner {
-		step = len(points) / inner
-	}
-	var out strings.Builder
-	for i := 0; i < len(points); i += step {
-		v := points[i].Value
-		idx := int(v / maxV * float64(len(bars)-1))
-		if idx < 0 {
-			idx = 0
+	colData := make([]col, cols)
+	for i := 0; i < cols; i++ {
+		if i < leading {
+			colData[i] = col{empty: true}
+			continue
 		}
-		out.WriteRune(bars[idx])
+		p := points[i-leading]
+		if maxV == 0 || p.Value <= 0 {
+			colData[i] = col{empty: true}
+			continue
+		}
+		levels := int((p.Value / maxV) * float64(rows*subSteps))
+		if levels < 1 {
+			levels = 1
+		}
+		full := levels / subSteps
+		partial := levels % subSteps
+		var top rune
+		if partial > 0 && full < rows {
+			top = bars[partial-1]
+		}
+		colData[i] = col{fillRows: full, topRune: top}
 	}
-	return histStyle.Render(out.String())
+
+	rowStrs := make([]string, rows)
+	for r := 0; r < rows; r++ {
+		// Top row corresponds to the highest visual position (rows-1).
+		rowFromBottom := rows - 1 - r
+		var b strings.Builder
+		for _, c := range colData {
+			switch {
+			case c.empty:
+				b.WriteRune(' ')
+			case c.fillRows > rowFromBottom:
+				b.WriteRune('█')
+			case c.fillRows == rowFromBottom && c.topRune != 0:
+				b.WriteRune(c.topRune)
+			default:
+				b.WriteRune(' ')
+			}
+		}
+		rowStrs[r] = histStyle.Render(b.String())
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rowStrs...)
 }
 
 func renderBar(w providers.Window, inner int) string {
