@@ -19,18 +19,21 @@ import (
 )
 
 type Provider struct {
-	// Limit caps PRs per section (authored + review queue). Default 5.
+	// Limit caps PRs per section. Default 5.
 	Limit int
 	// Repos and Orgs scope the GitHub-wide search. Empty = no scoping.
 	Repos []string
 	Orgs  []string
+	// ShowAll switches the tile from "yours + review queue" to "every
+	// open PR in the scoped repos/orgs, sorted by recent activity".
+	ShowAll bool
 }
 
-func New(limit int, repos, orgs []string) *Provider {
+func New(limit int, repos, orgs []string, showAll bool) *Provider {
 	if limit <= 0 {
 		limit = 5
 	}
-	return &Provider{Limit: limit, Repos: repos, Orgs: orgs}
+	return &Provider{Limit: limit, Repos: repos, Orgs: orgs, ShowAll: showAll}
 }
 
 func (p *Provider) Name() string             { return "GitHub" }
@@ -55,18 +58,42 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	}
 	snap.Header = "@" + login
 
-	authored, review, err := fetchPRs(ctx, login, p.Limit, p.scopeQuery())
+	scope := p.scopeQuery()
+
+	if p.ShowAll {
+		all, err := fetchAllOpen(ctx, p.Limit, scope)
+		if err != nil {
+			snap.Status = providers.StatusWarn
+			snap.Err = err
+			snap.Subtitle = "query failed: " + clipErr(err.Error())
+			return snap
+		}
+		if section := buildSection("Open PRs", all, login); section != nil {
+			snap.Sections = append(snap.Sections, *section)
+		}
+		switch len(all) {
+		case 0:
+			snap.Subtitle = "no open PRs in scope"
+		case 1:
+			snap.Subtitle = "1 open PR in scope"
+		default:
+			snap.Subtitle = fmt.Sprintf("%d open PRs in scope", len(all))
+		}
+		setStatusFromMine(&snap, all, login)
+		return snap
+	}
+
+	authored, review, err := fetchPRs(ctx, login, p.Limit, scope)
 	if err != nil {
 		snap.Status = providers.StatusWarn
 		snap.Err = err
 		snap.Subtitle = "query failed: " + clipErr(err.Error())
 		return snap
 	}
-
-	if section := buildSection("Your PRs", authored); section != nil {
+	if section := buildSection("Your PRs", authored, login); section != nil {
 		snap.Sections = append(snap.Sections, *section)
 	}
-	if section := buildSection("Review queue", review); section != nil {
+	if section := buildSection("Review queue", review, login); section != nil {
 		snap.Sections = append(snap.Sections, *section)
 	}
 
@@ -79,19 +106,25 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	default:
 		snap.Subtitle = fmt.Sprintf("%d PRs need attention", total)
 	}
+	setStatusFromMine(&snap, authored, login)
+	return snap
+}
 
-	// Flag worst-case CI on one of YOUR PRs as a status warning.
-	for _, pr := range authored {
-		if pr.Checks == "FAILURE" || pr.Checks == "ERROR" {
-			snap.Status = providers.StatusIncident
-			break
+// setStatusFromMine flags the tile red/amber when one of the user's own
+// PRs in the result set has failing or pending CI.
+func setStatusFromMine(snap *providers.Snapshot, prs []pr, login string) {
+	for _, pr := range prs {
+		if pr.Author.Login != login {
+			continue
 		}
-		if pr.Checks == "PENDING" {
+		switch pr.Checks {
+		case "FAILURE", "ERROR":
+			snap.Status = providers.StatusIncident
+			return
+		case "PENDING":
 			snap.Status = providers.StatusWarn
 		}
 	}
-
-	return snap
 }
 
 // pr captures the fields we render. JSON tags match the GraphQL field
@@ -103,6 +136,9 @@ type pr struct {
 	IsDraft    bool      `json:"isDraft"`
 	CreatedAt  time.Time `json:"createdAt"`
 	UpdatedAt  time.Time `json:"updatedAt"`
+	Author     struct {
+		Login string `json:"login"`
+	} `json:"author"`
 	Repository struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"repository"`
@@ -123,21 +159,27 @@ func currentLogin(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-const prsQuery = `
+const prFields = `
+  number title url isDraft createdAt updatedAt
+  author { login }
+  repository { nameWithOwner }
+  statusCheckRollup { state }
+`
+
+var prsQuery = `
 query($authored: String!, $review: String!, $limit: Int!) {
   authored: search(query: $authored, type: ISSUE, first: $limit) {
-    nodes { ... on PullRequest {
-      number title url isDraft createdAt updatedAt
-      repository { nameWithOwner }
-      statusCheckRollup { state }
-    } }
+    nodes { ... on PullRequest {` + prFields + `} }
   }
   review: search(query: $review, type: ISSUE, first: $limit) {
-    nodes { ... on PullRequest {
-      number title url isDraft createdAt updatedAt
-      repository { nameWithOwner }
-      statusCheckRollup { state }
-    } }
+    nodes { ... on PullRequest {` + prFields + `} }
+  }
+}`
+
+var allOpenQuery = `
+query($q: String!, $limit: Int!) {
+  search(query: $q, type: ISSUE, first: $limit) {
+    nodes { ... on PullRequest {` + prFields + `} }
   }
 }`
 
@@ -205,10 +247,50 @@ func fetchPRs(ctx context.Context, login string, limit int, scope string) (autho
 	return resp.Data.Authored.Nodes, resp.Data.Review.Nodes, nil
 }
 
+// fetchAllOpen returns every open PR in the configured scope, sorted
+// by recent activity. Used when [github].show_all is true.
+func fetchAllOpen(ctx context.Context, limit int, scope string) ([]pr, error) {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	query := "is:pr is:open archived:false sort:updated-desc" + scope
+	out, err := exec.CommandContext(cctx, "gh", "api", "graphql",
+		"-f", "query="+allOpenQuery,
+		"-f", "q="+query,
+		"-F", fmt.Sprintf("limit=%d", limit*2), // give a bit more for whole-repo view
+	).Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return nil, fmt.Errorf("gh: %s", strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return nil, err
+	}
+	var resp struct {
+		Data struct {
+			Search struct{ Nodes []pr } `json:"search"`
+		} `json:"data"`
+		Errors []struct{ Message string } `json:"errors"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("decode gh response: %w", err)
+	}
+	if len(resp.Errors) > 0 {
+		return nil, fmt.Errorf("gh graphql: %s", resp.Errors[0].Message)
+	}
+	for i := range resp.Data.Search.Nodes {
+		resp.Data.Search.Nodes[i].Checks = resp.Data.Search.Nodes[i].StatusCheckRollup.State
+	}
+	return resp.Data.Search.Nodes, nil
+}
+
 // buildSection turns a PR list into a labelled Section. Each PR row's
-// label embeds the CI icon, the PR number, a short repo, and the title;
-// the value cell holds the age ("3h", "2d") so it right-aligns cleanly.
-func buildSection(title string, prs []pr) *providers.Section {
+// label embeds the CI icon, an optional "(you)" marker when the user
+// authored the PR, the PR number, a short repo, and the title; the
+// value cell holds the age ("3h", "2d") so it right-aligns cleanly.
+// The URL field carries the github.com link so the tile renderer can
+// emit OSC 8 escapes that make rows cmd-clickable in modern terminals.
+func buildSection(title string, prs []pr, login string) *providers.Section {
 	if len(prs) == 0 {
 		return nil
 	}
@@ -216,12 +298,17 @@ func buildSection(title string, prs []pr) *providers.Section {
 	for _, pr := range prs {
 		icon := checkIcon(pr.Checks, pr.IsDraft)
 		repo := shortRepo(pr.Repository.NameWithOwner)
-		// "✓ #1106 webverse · feat(ui): import 128 icons…"
-		label := fmt.Sprintf("%s #%d %s · %s", icon, pr.Number, repo, pr.Title)
+		who := ""
+		if pr.Author.Login != "" && pr.Author.Login != login {
+			who = " @" + pr.Author.Login
+		}
+		// "✓ #1106 webverse @teammate · feat(ui): import 128 icons…"
+		label := fmt.Sprintf("%s #%d %s%s · %s", icon, pr.Number, repo, who, pr.Title)
 		rows = append(rows, providers.BreakdownEntry{
 			Label: label,
 			Value: float64(time.Since(pr.UpdatedAt).Seconds()),
 			Unit:  unitAge,
+			URL:   pr.URL,
 		})
 	}
 	return &providers.Section{

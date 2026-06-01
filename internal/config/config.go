@@ -34,8 +34,9 @@ type Config struct {
 type GitHubConfig struct {
 	Enabled *bool    `toml:"enabled"`
 	Limit   int      `toml:"limit"`
-	Repos   []string `toml:"repos"` // optional: ["owner/name", ...]
-	Orgs    []string `toml:"orgs"`  // optional: ["SafetyCulture", ...]
+	Repos   []string `toml:"repos"`    // optional: ["owner/name", ...]
+	Orgs    []string `toml:"orgs"`     // optional: ["SafetyCulture", ...]
+	ShowAll bool     `toml:"show_all"` // show every open PR (not just yours)
 }
 
 // IsEnabled returns whether the tile should appear. Missing key = on,
@@ -193,9 +194,14 @@ lookahead_days = 7
 [github]
 # Open PRs you authored + ones awaiting your review. Uses the gh CLI's
 # auth — run 'gh auth login' first if you haven't.
-enabled = true
-limit   = 5   # max PRs per section (yours / review queue)
-# Optional filters. Leave both empty to search all of GitHub.
-repos   = []  # e.g. ["SafetyCulture/safetyculture-webverse"]
-orgs    = []  # e.g. ["SafetyCulture"]
+enabled  = true
+limit    = 5   # max PRs per section
+# Scope: combine repos and orgs (OR'd by GitHub). Leave both empty to
+# search all of GitHub.
+repos    = []  # e.g. ["SafetyCulture/safetyculture-webverse"]
+orgs    = []   # e.g. ["SafetyCulture"]
+# When true, show every open PR in the scoped repos/orgs sorted by recent
+# activity — useful for whole-repo awareness. When false (default), only
+# show ones you authored or are asked to review.
+show_all = false
 `

@@ -280,8 +280,23 @@ func breakdownLine(b providers.BreakdownEntry, inner int) string {
 	if labelW < 1 {
 		labelW = 1
 	}
-	label := labelStyle.Render(padRight(clip(b.Label, labelW), labelW))
+	clipped := clip(b.Label, labelW)
+	padded := padRight(clipped, labelW)
+	label := labelStyle.Render(padded)
+	if b.URL != "" {
+		label = osc8Link(b.URL, label)
+	}
 	return label + " " + val
+}
+
+// osc8Link wraps body in an OSC 8 hyperlink escape. Modern terminals
+// (iTerm2, Kitty, WezTerm, recent Terminal.app and VS Code) render the
+// body as cmd-clickable, opening URL in the user's browser. Older
+// terminals silently ignore the escapes and just show the body text.
+func osc8Link(url, body string) string {
+	const esc = "\x1b]8;;"
+	const st = "\x1b\\"
+	return esc + url + st + body + esc + st
 }
 
 func statsGrid(stats []providers.BreakdownEntry, inner int) string {

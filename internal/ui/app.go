@@ -34,7 +34,7 @@ func NewApp(cfg config.Config) App {
 	)
 	provs := []providers.Provider{cc, system.New()}
 	if cfg.GitHub.IsEnabled() {
-		provs = append(provs, github.New(cfg.GitHub.Limit, cfg.GitHub.Repos, cfg.GitHub.Orgs))
+		provs = append(provs, github.New(cfg.GitHub.Limit, cfg.GitHub.Repos, cfg.GitHub.Orgs, cfg.GitHub.ShowAll))
 	}
 	switch {
 	case cfg.MacCal.IsEnabled():

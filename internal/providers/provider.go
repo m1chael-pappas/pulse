@@ -47,10 +47,13 @@ type Window struct {
 }
 
 // BreakdownEntry is a labelled slice of cost or count (e.g. per-model spend).
+// When URL is set, the tile renderer wraps the label in an OSC 8 hyperlink
+// escape — modern terminals render it as a cmd-clickable link.
 type BreakdownEntry struct {
 	Label string
 	Value float64
 	Unit  Unit
+	URL   string
 }
 
 // HistoryPoint is one data point in a time-series (e.g. cost per day).
