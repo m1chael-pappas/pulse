@@ -80,7 +80,7 @@ func buildLines(snap providers.Snapshot, inner int) []string {
 			lines = append(lines, histogram(snap.History, inner))
 		}
 		if len(snap.Breakdown) > 0 {
-			lines = append(lines, "", labelStyle.Render("Where it came from"))
+			lines = append(lines, "", labelStyle.Render("Where it came from (API equiv.)"))
 			for _, b := range snap.Breakdown {
 				lines = append(lines, breakdownLine(b, inner))
 			}
@@ -360,7 +360,58 @@ func histogram(points []providers.HistoryPoint, inner int) string {
 		}
 		rowStrs[r] = histStyle.Render(b.String())
 	}
+	axis := histogramAxis(points, perPoint, extra)
+	if axis != "" {
+		rowStrs = append(rowStrs, axisStyle.Render(axis))
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, rowStrs...)
+}
+
+// histogramAxis renders a row of day-of-week initials (M/T/W/T/F/S/S)
+// aligned to each bar column. When columns are 2+ wide, the initial sits
+// in the left cell of each column with a space on the right so labels
+// don't bleed into each other.
+func histogramAxis(points []providers.HistoryPoint, perPoint, extra int) string {
+	if len(points) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, p := range points {
+		width := perPoint
+		if i < extra {
+			width++
+		}
+		initial := dayInitial(p.At)
+		if width <= 1 {
+			b.WriteString(initial)
+			continue
+		}
+		b.WriteString(initial)
+		for j := 1; j < width; j++ {
+			b.WriteByte(' ')
+		}
+	}
+	return b.String()
+}
+
+func dayInitial(t time.Time) string {
+	switch t.Weekday() {
+	case time.Monday:
+		return "M"
+	case time.Tuesday:
+		return "T"
+	case time.Wednesday:
+		return "W"
+	case time.Thursday:
+		return "T"
+	case time.Friday:
+		return "F"
+	case time.Saturday:
+		return "S"
+	case time.Sunday:
+		return "S"
+	}
+	return " "
 }
 
 func renderBar(w providers.Window, inner int) string {
@@ -496,5 +547,6 @@ var (
 	resetStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Italic(true)
 	noteStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("248")).Italic(true)
 	histStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	axisStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 )

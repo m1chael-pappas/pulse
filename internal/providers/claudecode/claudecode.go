@@ -122,11 +122,14 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	// Try to enrich with real plan limits from the OAuth usage endpoint.
 	usage, oauthErr := p.fetchUsage(ctx, acct)
 	windows := p.localCostWindows(agg, sessionStart, sessionReset, dayStart, dayReset, monthStart, monthReset)
+	const tokenEquivNote = "Token-equivalent — Max/Enterprise plans bill flat-rate"
 	if usage != nil {
 		windows = p.realQuotaWindows(usage, now)
-		subtitle = "" // success = no chatter
+		subtitle = tokenEquivNote
 	} else if oauthErr != nil {
-		subtitle = oauthHint(oauthErr)
+		subtitle = tokenEquivNote + " · " + oauthHint(oauthErr)
+	} else {
+		subtitle = tokenEquivNote
 	}
 
 	return providers.Snapshot{
@@ -303,8 +306,8 @@ func statusFromOAuthErr(err error) providers.Status {
 
 func buildStats(agg aggregate) []providers.BreakdownEntry {
 	return []providers.BreakdownEntry{
-		{Label: "Today", Value: agg.costToday, Unit: providers.UnitUSD},
-		{Label: "30d cost", Value: agg.cost30d, Unit: providers.UnitUSD},
+		{Label: "Today (API equiv.)", Value: agg.costToday, Unit: providers.UnitUSD},
+		{Label: "30d (API equiv.)", Value: agg.cost30d, Unit: providers.UnitUSD},
 		{Label: "30d tokens", Value: float64(agg.tokens30d), Unit: providers.UnitTokens},
 		{Label: "Today tokens", Value: float64(agg.tokensInputToday + agg.tokensOutputToday + agg.tokensCacheToday), Unit: providers.UnitTokens},
 	}
