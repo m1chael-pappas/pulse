@@ -68,6 +68,45 @@ var errOAuthUnauthorized = errors.New("OAuth token rejected (401) — run `claud
 // caller's refresh cadence.
 var errOAuthRateLimited = errors.New("OAuth usage endpoint rate-limited (429)")
 
+// FetchUsageRaw reads the Keychain credential and returns the raw response
+// body from /api/oauth/usage — useful for diagnostics. Bypasses the
+// rate-limit gate so users running `pulse usage` get an immediate answer.
+func FetchUsageRaw(ctx context.Context) ([]byte, error) {
+	acct, _ := readAccount()
+	blob, err := readKeychainCredential(ctx, acct.EmailAddress)
+	if err != nil {
+		blob, err = readKeychainCredential(ctx, "")
+		if err != nil {
+			return nil, err
+		}
+	}
+	cred, err := parseOAuthCredential(blob)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, oauthUsageURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+cred.AccessToken)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("anthropic-beta", oauthBetaHeader)
+	req.Header.Set("User-Agent", oauthDefaultUserAgent)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		return body, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return body, nil
+}
+
 func fetchOAuthUsage(ctx context.Context, accessToken string) (*oauthUsage, error) {
 	if until, blocked := oauthRateGate.blockedUntil(); blocked {
 		return nil, fmt.Errorf("%w (retry after %s)", errOAuthRateLimited, time.Until(until).Round(time.Second))
