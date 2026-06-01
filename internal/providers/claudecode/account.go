@@ -106,22 +106,22 @@ func historyPath() (string, error) {
 }
 
 // recordAccountIfChanged appends a switch entry when the active account
-// differs from the most recent recorded one. Best-effort — errors are
-// returned but the caller may safely ignore.
-func recordAccountIfChanged(curr Account) error {
+// differs from the most recent recorded one. Returns (changed, err).
+// Best-effort — callers may safely ignore the error.
+func recordAccountIfChanged(curr Account) (bool, error) {
 	if curr.AccountUUID == "" {
-		return nil
+		return false, nil
 	}
 	path, err := historyPath()
 	if err != nil {
-		return err
+		return false, err
 	}
 	var history []accountSwitch
 	if b, err := os.ReadFile(path); err == nil {
 		_ = json.Unmarshal(b, &history)
 	}
 	if len(history) > 0 && history[len(history)-1].AccountUUID == curr.AccountUUID {
-		return nil
+		return false, nil
 	}
 	history = append(history, accountSwitch{
 		AccountUUID:      curr.AccountUUID,
@@ -132,10 +132,10 @@ func recordAccountIfChanged(curr Account) error {
 	})
 	b, err := json.MarshalIndent(history, "", "  ")
 	if err != nil {
-		return err
+		return false, err
 	}
 	if err := os.WriteFile(path, b, 0o600); err != nil {
-		return fmt.Errorf("write account history: %w", err)
+		return false, fmt.Errorf("write account history: %w", err)
 	}
-	return nil
+	return true, nil
 }

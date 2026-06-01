@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -68,6 +69,10 @@ var errOAuthUnauthorized = errors.New("OAuth token rejected (401) — run `claud
 var errOAuthRateLimited = errors.New("OAuth usage endpoint rate-limited (429)")
 
 func fetchOAuthUsage(ctx context.Context, accessToken string) (*oauthUsage, error) {
+	if until, blocked := oauthRateGate.blockedUntil(); blocked {
+		return nil, fmt.Errorf("%w (retry after %s)", errOAuthRateLimited, time.Until(until).Round(time.Second))
+	}
+
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
@@ -97,13 +102,37 @@ func fetchOAuthUsage(ctx context.Context, accessToken string) (*oauthUsage, erro
 		if err := json.Unmarshal(body, &out); err != nil {
 			return nil, fmt.Errorf("decode oauth usage: %w", err)
 		}
+		oauthRateGate.clear()
 		return &out, nil
 	case http.StatusUnauthorized:
 		return nil, errOAuthUnauthorized
 	case http.StatusTooManyRequests:
+		oauthRateGate.trip(parseRetryAfter(resp.Header.Get("Retry-After")))
 		return nil, errOAuthRateLimited
+	case http.StatusForbidden:
+		// Most likely the endpoint is not exposed for this plan tier
+		// (e.g. Enterprise uses the Admin API instead). Treat as a longer
+		// backoff so we don't poll uselessly.
+		oauthRateGate.trip(15 * time.Minute)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("oauth usage HTTP 403 (likely not exposed for this plan): %s", string(body))
 	default:
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return nil, fmt.Errorf("oauth usage HTTP %d: %s", resp.StatusCode, string(body))
 	}
+}
+
+func parseRetryAfter(raw string) time.Duration {
+	if raw == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(raw); err == nil && secs > 0 {
+		return time.Duration(secs) * time.Second
+	}
+	if t, err := http.ParseTime(raw); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
 }

@@ -81,7 +81,9 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	}
 
 	acct, _ := readAccount()
-	_ = recordAccountIfChanged(acct)
+	if changed, _ := recordAccountIfChanged(acct); changed {
+		oauthRateGate.clear()
+	}
 
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	dayReset := dayStart.Add(24 * time.Hour)
