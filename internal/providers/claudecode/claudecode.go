@@ -49,12 +49,13 @@ func FromConfig(note string, session, daily, month float64) *Provider {
 
 func parseNoteMode(s string) NoteMode {
 	switch s {
-	case "off":
-		return NoteModeOff
+	case "prompt":
+		return NoteModePrompt
 	case "project":
 		return NoteModeProject
 	default:
-		return NoteModePrompt
+		// "off", "", anything unrecognised → off (privacy-safe default)
+		return NoteModeOff
 	}
 }
 
@@ -120,9 +121,9 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	windows := p.localCostWindows(agg, sessionStart, sessionReset, dayStart, dayReset, monthStart, monthReset)
 	if usage != nil {
 		windows = p.realQuotaWindows(usage, now)
-		subtitle = fmt.Sprintf("Live plan limits via api.anthropic.com · logged in as %s", acct.EmailAddress)
+		subtitle = "" // success = no chatter
 	} else if oauthErr != nil {
-		subtitle += " · " + oauthHint(oauthErr)
+		subtitle = oauthHint(oauthErr)
 	}
 
 	return providers.Snapshot{
@@ -148,32 +149,43 @@ func (p *Provider) localCostWindows(agg aggregate, sessionStart, sessionReset, d
 }
 
 func (p *Provider) realQuotaWindows(u *oauthUsage, now time.Time) []providers.Window {
-	mk := func(label string, w *oauthWindow, fallbackHours float64) providers.Window {
-		if w == nil {
-			return providers.Window{Label: label}
+	// Weekly-tier sub-windows share the overall weekly reset when the API
+	// returns them as null (which happens at 0% utilization on Max plans).
+	weeklyReset := time.Time{}
+	if u.SevenDay != nil {
+		weeklyReset = u.SevenDay.Reset()
+	}
+
+	mk := func(label string, w *oauthWindow, sharedReset time.Time, hours float64) providers.Window {
+		used := 0.0
+		reset := sharedReset
+		if w != nil {
+			used = w.Utilization
+			if r := w.Reset(); !r.IsZero() {
+				reset = r
+			}
 		}
-		reset := w.Reset()
 		start := time.Time{}
-		if !reset.IsZero() && fallbackHours > 0 {
-			start = reset.Add(-time.Duration(fallbackHours) * time.Hour)
+		if !reset.IsZero() && hours > 0 {
+			start = reset.Add(-time.Duration(hours) * time.Hour)
 		}
 		return providers.Window{
 			Label:    label,
-			Used:     w.Utilization,
+			Used:     used,
 			Limit:    100,
 			Unit:     providers.UnitPercent,
 			Start:    start,
 			ResetsAt: reset,
 		}
 	}
+
 	out := []providers.Window{
-		mk("5h session", u.FiveHour, 5),
-		mk("Weekly", u.SevenDay, 24*7),
-		mk("Weekly Opus", u.SevenDayOpus, 24*7),
-		mk("Weekly Sonnet", u.SevenDaySonnet, 24*7),
-	}
-	if u.SevenDayRoutines != nil {
-		out = append(out, mk("Routines", u.SevenDayRoutines, 24*7))
+		mk("5h session", u.FiveHour, time.Time{}, 5),
+		mk("Weekly", u.SevenDay, time.Time{}, 24*7),
+		mk("Weekly Opus", u.SevenDayOpus, weeklyReset, 24*7),
+		mk("Weekly Sonnet", u.SevenDaySonnet, weeklyReset, 24*7),
+		mk("Routines", u.SevenDayRoutines, weeklyReset, 24*7),
+		mk("OAuth apps", u.SevenDayOAuthApps, weeklyReset, 24*7),
 	}
 	if u.ExtraUsage != nil && u.ExtraUsage.IsEnabled {
 		out = append(out, providers.Window{
@@ -181,11 +193,12 @@ func (p *Provider) realQuotaWindows(u *oauthUsage, now time.Time) []providers.Wi
 			Used:     u.ExtraUsage.Utilization,
 			Limit:    100,
 			Unit:     providers.UnitPercent,
-			Start:    time.Time{},
 			ResetsAt: monthEnd(now),
 		})
 	}
-	// Drop placeholders for windows the response omitted (label only, no reset).
+
+	// Drop only windows the API neither populated nor implied (no reset,
+	// no usage signal).
 	filtered := out[:0]
 	for _, w := range out {
 		if w.ResetsAt.IsZero() && w.Used == 0 {

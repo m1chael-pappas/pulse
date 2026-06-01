@@ -64,13 +64,25 @@ func Render(snap providers.Snapshot, width, height int, focused bool) string {
 }
 
 func headerRow(snap providers.Snapshot, inner int) string {
-	left := lipgloss.JoinHorizontal(lipgloss.Top,
-		statusDot(snap.Status), " ", nameStyle.Render(snap.Name))
-	if snap.Header == "" {
+	dot := statusDot(snap.Status)
+	right := ""
+	rightW := 0
+	if snap.Header != "" {
+		right = planStyle.Render(snap.Header)
+		rightW = lipgloss.Width(right)
+	}
+	// Reserve room for "<dot> <name>  <…gap…>  <Header>".
+	// dot+space = 2 cols, minimum gap = 2 cols.
+	nameBudget := inner - 2 - rightW - 2
+	if nameBudget < 8 {
+		nameBudget = 8
+	}
+	name := clip(snap.Name, nameBudget)
+	left := lipgloss.JoinHorizontal(lipgloss.Top, dot, " ", nameStyle.Render(name))
+	if right == "" {
 		return left
 	}
-	right := planStyle.Render(snap.Header)
-	gap := inner - lipgloss.Width(left) - lipgloss.Width(right)
+	gap := inner - lipgloss.Width(left) - rightW
 	if gap < 1 {
 		gap = 1
 	}

@@ -91,10 +91,10 @@ const defaultTemplate = `# pulse config — auto-generated on first run.
 
 [claudecode]
 # Footer note privacy:
-#   "prompt"  → "<project> — <last user prompt>" (default)
+#   "off"     → no footer at all (default — keeps prompts out of screenshots)
 #   "project" → project name only, hides prompt text
-#   "off"     → no footer at all
-note = "prompt"
+#   "prompt"  → "<project> — <last user prompt>"
+note = "off"
 
 # Optional USD budgets. Leave at 0 to show a time-elapsed bar instead.
 # Set a number if you've decided what a fair budget looks like for you.
