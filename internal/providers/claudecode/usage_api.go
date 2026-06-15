@@ -87,14 +87,7 @@ var errOAuthRateLimited = errors.New("OAuth usage endpoint rate-limited (429)")
 // rate-limit gate so users running `pulse usage` get an immediate answer.
 func FetchUsageRaw(ctx context.Context) ([]byte, error) {
 	acct, _ := readAccount()
-	blob, err := readKeychainCredential(ctx, acct.EmailAddress)
-	if err != nil {
-		blob, err = readKeychainCredential(ctx, "")
-		if err != nil {
-			return nil, err
-		}
-	}
-	cred, err := parseOAuthCredential(blob)
+	cred, err := readOAuthCredential(ctx, acct.EmailAddress)
 	if err != nil {
 		return nil, err
 	}

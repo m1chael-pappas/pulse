@@ -11,6 +11,7 @@ type pricing struct {
 }
 
 var modelPricing = map[string]pricing{
+	"claude-opus-4-8":   {input: 15, output: 75, cacheWrite5m: 18.75, cacheWrite1h: 30, cacheRead: 1.5},
 	"claude-opus-4-7":   {input: 15, output: 75, cacheWrite5m: 18.75, cacheWrite1h: 30, cacheRead: 1.5},
 	"claude-opus-4-6":   {input: 15, output: 75, cacheWrite5m: 18.75, cacheWrite1h: 30, cacheRead: 1.5},
 	"claude-sonnet-4-6": {input: 3, output: 15, cacheWrite5m: 3.75, cacheWrite1h: 6, cacheRead: 0.3},

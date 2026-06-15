@@ -236,7 +236,36 @@ func (p *Provider) maxPlanWindows(u *oauthUsage, now time.Time) []providers.Wind
 			ResetsAt: monthEnd(now),
 		})
 	}
+	out = append(out, u.promoWindows()...)
 	return dropEmpty(out)
+}
+
+// promoWindows surfaces the rotating, codenamed quota slices Anthropic returns
+// under keys like omelette_promotional / iguana_necktie / tangelo (promotions
+// and betas). They appear on both Max and Enterprise responses. The struct
+// already parses them; without this they were silently dropped. We render any
+// with non-zero utilization so the user sees the data instead of losing it.
+func (u *oauthUsage) promoWindows() []providers.Window {
+	candidates := []struct {
+		label string
+		w     *oauthWindow
+	}{
+		{"Promotional", u.OmelettePromotional},
+		{"Weekly Omelette", u.SevenDayOmelette},
+		{"Weekly Cowork", u.SevenDayCowork},
+		{"Promo (Iguana)", u.IguanaNecktie},
+		{"Promo (Tangelo)", u.Tangelo},
+	}
+	var out []providers.Window
+	for _, c := range candidates {
+		if c.w == nil || c.w.Utilization == 0 {
+			continue
+		}
+		// hours=0 → leave Start zero; promo periods vary and aren't a fixed
+		// rolling window, so we only trust the reset timestamp.
+		out = append(out, mkPercent(c.label, c.w, time.Time{}, 0))
+	}
+	return out
 }
 
 func (p *Provider) enterpriseWindows(u *oauthUsage, now time.Time) []providers.Window {
@@ -255,6 +284,7 @@ func (p *Provider) enterpriseWindows(u *oauthUsage, now time.Time) []providers.W
 			ResetsAt: monthEnd(now),
 		})
 	}
+	out = append(out, u.promoWindows()...)
 	return dropEmpty(out)
 }
 
@@ -297,16 +327,7 @@ func monthEnd(now time.Time) time.Time {
 }
 
 func (p *Provider) fetchUsage(ctx context.Context, acct Account) (*oauthUsage, error) {
-	blob, err := readKeychainCredential(ctx, acct.EmailAddress)
-	if err != nil {
-		// Retry without account scoping — login order or older builds may
-		// have stored under a non-email account name.
-		blob, err = readKeychainCredential(ctx, "")
-		if err != nil {
-			return nil, err
-		}
-	}
-	cred, err := parseOAuthCredential(blob)
+	cred, err := readOAuthCredential(ctx, acct.EmailAddress)
 	if err != nil {
 		return nil, err
 	}

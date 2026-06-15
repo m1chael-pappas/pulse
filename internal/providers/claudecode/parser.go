@@ -183,6 +183,8 @@ func modelLabel(m string) string {
 		return "unknown"
 	}
 	switch {
+	case strings.HasPrefix(m, "claude-opus-4-8"):
+		return "Opus 4.8"
 	case strings.HasPrefix(m, "claude-opus-4-7"):
 		return "Opus 4.7"
 	case strings.HasPrefix(m, "claude-opus-4-6"):

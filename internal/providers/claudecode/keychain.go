@@ -3,7 +3,9 @@ package claudecode
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"os/user"
 	"runtime"
 	"strings"
 	"time"
@@ -68,4 +70,57 @@ func readKeychainCredential(ctx context.Context, account string) ([]byte, error)
 		return nil, err
 	}
 	return []byte(strings.TrimSpace(string(out))), nil
+}
+
+// keychainAccountCandidates returns the Keychain account names Claude Code may
+// have stored the primary credential under, most-likely first.
+//
+// Claude Code 2.1.x (≈2.1.175) split its Keychain layout: the primary
+// claudeAiOauth blob moved to an account keyed on the OS username, while the
+// older shared "claude-code-user" account is left holding only mcpOAuth (the
+// per-MCP-server tokens). Older builds scoped by email or stored everything
+// under the unscoped item. We try the OS username and email first, then fall
+// back to an unscoped lookup — but callers MUST validate that the returned
+// blob actually contains claudeAiOauth, since the unscoped/legacy item now
+// resolves to the mcpOAuth-only payload on current builds.
+func keychainAccountCandidates(email string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(s string) {
+		if s != "" && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	if u, err := user.Current(); err == nil {
+		add(u.Username)
+	}
+	add(os.Getenv("USER"))
+	add(email)
+	add("claude-code-user") // legacy account name, explicit
+	out = append(out, "")   // unscoped fallback — may return the mcpOAuth-only item
+	return out
+}
+
+// readOAuthCredential walks the candidate Keychain accounts and returns the
+// first credential that actually carries a claudeAiOauth access token. This
+// skips the stale mcpOAuth-only item that current Claude Code builds leave
+// under the legacy "claude-code-user" account.
+func readOAuthCredential(ctx context.Context, email string) (oauthCredential, error) {
+	var lastErr error = ErrKeychainNotFound
+	for _, acct := range keychainAccountCandidates(email) {
+		blob, err := readKeychainCredential(ctx, acct)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		cred, err := parseOAuthCredential(blob)
+		if err != nil {
+			// e.g. a blob with only mcpOAuth and no claudeAiOauth — keep looking.
+			lastErr = err
+			continue
+		}
+		return cred, nil
+	}
+	return oauthCredential{}, lastErr
 }
