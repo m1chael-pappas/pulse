@@ -44,9 +44,9 @@ func New(icsURL string, lookahead, lookaheadDays int) *Provider {
 	}
 }
 
-func (p *Provider) Name() string             { return "Calendar" }
-func (p *Provider) Interval() time.Duration  { return 5 * time.Minute }
-func (p *Provider) PreferredWidth() int      { return 64 }
+func (p *Provider) Name() string            { return "Calendar" }
+func (p *Provider) Interval() time.Duration { return 5 * time.Minute }
+func (p *Provider) PreferredWidth() int     { return 64 }
 
 func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	snap := providers.Snapshot{Name: p.Name(), Status: providers.StatusOK}

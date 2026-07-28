@@ -28,6 +28,11 @@ today.
 - **Claude costs were wrong for every Opus model.** Opus 4.6/4.7/4.8 were
   priced at $15/$75 per million tokens; the correct rate is $5/$25, so Opus
   usage was inflated roughly 3×.
+- **Unhelpful error for a bad calendar name.** icalBuddy reports an unmatched
+  `[maccal].calendars` entry as `No calendars.`, but the hint for that case
+  matched lowercase `no calendar` only — so the tile showed the raw message
+  instead of the fix. Matching is now case-insensitive, and the message lists
+  the calendar names that do exist.
 
 ### Added
 
@@ -40,8 +45,12 @@ today.
   dated variants (`claude-haiku-4-5-20251001`), and the bare `opus` / `sonnet`
   / `haiku` aliases found in older logs now resolve to the right model instead
   of falling through to the Sonnet fallback.
-- **Tests** for the calendar parser and the pricing table, covering each of the
-  bugs above.
+- **`pulse doctor` lists your calendar names.** `[maccal].calendars` matches a
+  calendar's name, which is frequently not the account it syncs from — picking
+  the account name yields an empty tile with no clue why. doctor now prints the
+  exact strings to use.
+- **Tests** for the calendar parser, the pricing table, and the error hints,
+  covering each of the bugs above.
 
 ### Changed
 

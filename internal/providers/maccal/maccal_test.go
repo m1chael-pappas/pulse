@@ -1,8 +1,12 @@
 package maccal
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/m1chael-pappas/pulse/internal/providers"
 )
@@ -98,6 +102,32 @@ func TestMultiDayTimedEvent(t *testing.T) {
 	wantEnd := time.Date(2026, 8, 4, 17, 0, 0, 0, time.Local)
 	if !e.End.Equal(wantEnd) {
 		t.Errorf("end = %v, want %v", e.End, wantEnd)
+	}
+}
+
+// icalBuddy reports an unmatched -ic filter as "No calendars." — capital N.
+// A case-sensitive match let that fall through to the raw error text.
+func TestDescribeErrMatchesIcalBuddyCasing(t *testing.T) {
+	got := describeErr(context.Background(), "", errors.New("icalBuddy: error: No calendars."), []string{"Work"})
+	if strings.Contains(got, "No calendars") {
+		t.Errorf("raw icalBuddy text surfaced to the user: %q", got)
+	}
+	if !strings.Contains(got, "calendar") {
+		t.Errorf("describeErr = %q, want a calendar-config hint", got)
+	}
+}
+
+func TestDescribeErrPermissionDenied(t *testing.T) {
+	got := describeErr(context.Background(), "", errors.New("icalBuddy: Access Denied"), nil)
+	if !strings.Contains(got, "System Settings") {
+		t.Errorf("describeErr = %q, want the TCC hint", got)
+	}
+}
+
+func TestTruncateIsRuneSafe(t *testing.T) {
+	got := truncate(strings.Repeat("🇪🇺", 60))
+	if !utf8.ValidString(got) {
+		t.Errorf("truncate produced invalid UTF-8: %q", got)
 	}
 }
 

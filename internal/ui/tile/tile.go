@@ -232,11 +232,12 @@ func formatUSD(v float64) string {
 }
 
 // eventLines renders upcoming-event rows. Layout:
-//   Today
-//     09:00 — Standup (15m)
-//     14:00 — 1:1 Alex
-//   Tomorrow
-//     all day — Public holiday
+//
+//	Today
+//	  09:00 — Standup (15m)
+//	  14:00 — 1:1 Alex
+//	Tomorrow
+//	  all day — Public holiday
 func eventLines(events []providers.Event, inner int) []string {
 	if len(events) == 0 {
 		return nil

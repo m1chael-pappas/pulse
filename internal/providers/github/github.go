@@ -38,9 +38,9 @@ func New(limit int, repos, orgs []string, showAll bool) *Provider {
 	return &Provider{Limit: limit, Repos: repos, Orgs: orgs, ShowAll: showAll}
 }
 
-func (p *Provider) Name() string             { return "GitHub" }
-func (p *Provider) Interval() time.Duration  { return 60 * time.Second }
-func (p *Provider) PreferredWidth() int      { return 64 }
+func (p *Provider) Name() string            { return "GitHub" }
+func (p *Provider) Interval() time.Duration { return 60 * time.Second }
+func (p *Provider) PreferredWidth() int     { return 64 }
 
 func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	snap := providers.Snapshot{Name: p.Name(), Status: providers.StatusOK}
@@ -132,13 +132,13 @@ func setStatusFromMine(snap *providers.Snapshot, prs []pr, login string) {
 // pr captures the fields we render. JSON tags match the GraphQL field
 // shape so we can decode the response directly.
 type pr struct {
-	Number     int       `json:"number"`
-	Title      string    `json:"title"`
-	URL        string    `json:"url"`
-	IsDraft    bool      `json:"isDraft"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
-	Author     struct {
+	Number    int       `json:"number"`
+	Title     string    `json:"title"`
+	URL       string    `json:"url"`
+	IsDraft   bool      `json:"isDraft"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	Author    struct {
 		Login string `json:"login"`
 	} `json:"author"`
 	Repository struct {

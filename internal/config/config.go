@@ -130,9 +130,9 @@ func Path() (string, error) {
 
 // LoadResult holds everything the loader can communicate to its caller.
 type LoadResult struct {
-	Config     Config
-	Path       string
-	FirstRun   bool // true when the loader had to create the config file
+	Config   Config
+	Path     string
+	FirstRun bool // true when the loader had to create the config file
 }
 
 // Load reads the config file. On first run (file missing) it writes the

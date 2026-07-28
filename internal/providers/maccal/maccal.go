@@ -78,7 +78,7 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	if err != nil {
 		snap.Status = providers.StatusWarn
 		snap.Err = err
-		snap.Subtitle = describeErr(err)
+		snap.Subtitle = describeErr(ctx, bin, err, p.Calendars)
 		return snap
 	}
 
@@ -388,16 +388,82 @@ func headerForNext(e providers.Event, now time.Time) string {
 	}
 }
 
-func describeErr(err error) string {
+// describeErr turns an icalBuddy failure into something actionable in a
+// 64-column tile. Matching is case-insensitive: icalBuddy reports the
+// empty-filter case as "No calendars.", which a lowercase-only match misses,
+// leaving the user staring at the raw error.
+func describeErr(ctx context.Context, bin string, err error, cals []string) string {
 	msg := err.Error()
+	low := strings.ToLower(msg)
 	switch {
-	case strings.Contains(msg, "not authorized"), strings.Contains(msg, "denied"):
+	case strings.Contains(low, "not authorized"), strings.Contains(low, "denied"):
 		return "Calendar access denied — System Settings → Privacy → Calendars"
-	case strings.Contains(msg, "no calendar"):
+	case strings.Contains(low, "no calendar"):
+		// -ic matches the calendar's name, which is often not the account it
+		// syncs from ("Work", not "you@company.com"). Naming the real ones
+		// turns a dead end into a one-line config fix.
+		if names := listCalendars(ctx, bin); len(names) > 0 {
+			return truncate(fmt.Sprintf("no calendar %s — have: %s",
+				strings.Join(cals, ", "), strings.Join(names, ", ")))
+		}
 		return "no matching calendar (check [maccal].calendars in config)"
 	}
-	if len(msg) > 80 {
-		msg = msg[:77] + "…"
+	return truncate(msg)
+}
+
+// VisibleCalendars returns the calendar names EventKit exposes, for
+// `pulse doctor`. These are the exact strings [maccal].calendars matches
+// against — note they are calendar names, not the accounts syncing them.
+// Returns nil if icalBuddy is missing or unreadable.
+func VisibleCalendars(ctx context.Context) []string {
+	bin, err := findIcalBuddy()
+	if err != nil {
+		return nil
 	}
-	return msg
+	return listCalendars(ctx, bin)
+}
+
+// listCalendars returns the distinct calendar names icalBuddy can see.
+// Best-effort: any failure just means describeErr falls back to its generic
+// hint, so errors are deliberately swallowed.
+func listCalendars(ctx context.Context, bin string) []string {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	out, err := exec.CommandContext(cctx, bin, "calendars").Output()
+	if err != nil {
+		return nil
+	}
+	var names []string
+	seen := make(map[string]struct{})
+	// Same bullet-delimited shape as events: name first, indented
+	// "type:"/"UID:" properties after. Accounts commonly expose several
+	// calendars under one name, so de-dupe.
+	for _, chunk := range strings.Split(string(out), "•") {
+		name, _, _ := strings.Cut(strings.TrimSpace(chunk), "\n")
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names
+}
+
+// truncate clips to a tile-friendly width on rune boundaries — calendar
+// names and event titles routinely carry emoji.
+func truncate(s string) string {
+	const max = 80
+	if len(s) <= max {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max-1]) + "…"
 }

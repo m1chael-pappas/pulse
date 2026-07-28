@@ -31,9 +31,9 @@ type Provider struct {
 
 func New() *Provider { return &Provider{DiskPath: "/"} }
 
-func (p *Provider) Name() string             { return "System" }
-func (p *Provider) Interval() time.Duration  { return 3 * time.Second }
-func (p *Provider) PreferredWidth() int      { return 64 }
+func (p *Provider) Name() string            { return "System" }
+func (p *Provider) Interval() time.Duration { return 3 * time.Second }
+func (p *Provider) PreferredWidth() int     { return 64 }
 
 func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	snap := providers.Snapshot{
@@ -162,4 +162,3 @@ func trimSensorKey(k string) string {
 	}
 	return k
 }
-

@@ -4,12 +4,15 @@
 package doctor
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/m1chael-pappas/pulse/internal/providers/maccal"
 )
 
 type result struct {
@@ -124,6 +127,13 @@ func checkIcalBuddy() result {
 		if path, err := exec.LookPath(name); err == nil {
 			r.status = statusOK
 			r.hint = path
+			// Listing the names removes the guesswork from
+			// [maccal].calendars — the value must be a calendar name, which
+			// is often not the account it syncs from.
+			if cals := maccal.VisibleCalendars(context.Background()); len(cals) > 0 {
+				r.hint += "\nVisible calendars: " + strings.Join(cals, ", ") +
+					"\nUse these exact names in [maccal].calendars ([] = all)."
+			}
 			return r
 		}
 	}

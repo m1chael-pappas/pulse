@@ -16,9 +16,9 @@ import (
 type NoteMode int
 
 const (
-	NoteModePrompt    NoteMode = iota // "<project> — <last prompt>" (default)
-	NoteModeProject                   // "<project>" only — hides prompt text
-	NoteModeOff                       // hide the note entirely
+	NoteModePrompt  NoteMode = iota // "<project> — <last prompt>" (default)
+	NoteModeProject                 // "<project>" only — hides prompt text
+	NoteModeOff                     // hide the note entirely
 )
 
 type Provider struct {
