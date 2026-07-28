@@ -127,6 +127,14 @@ func processFile(path string, a *aggregate, startDay, earliest, start30d, sessio
 				continue
 			}
 			u := ll.Message.Usage
+			// Claude Code writes placeholder assistant records (model
+			// "<synthetic>") that never hit the API. They carry all-zero
+			// usage, so skipping them costs nothing and keeps a $0.00 row
+			// out of the per-model breakdown.
+			if u.InputTokens == 0 && u.OutputTokens == 0 &&
+				u.CacheCreationInputTokens == 0 && u.CacheReadInputTokens == 0 {
+				continue
+			}
 			c := costFor(ll.Message.Model, u.InputTokens, u.OutputTokens, u.CacheCreationInputTokens, u.CacheReadInputTokens)
 			day := ts.Format("2006-01-02")
 			a.costByDay[day] += c
@@ -177,22 +185,27 @@ func processFile(path string, a *aggregate, startDay, earliest, start30d, sessio
 	_ = io.EOF
 }
 
+var modelLabels = map[string]string{
+	"claude-fable-5":    "Fable 5",
+	"claude-mythos-5":   "Mythos 5",
+	"claude-opus-5":     "Opus 5",
+	"claude-opus-4-8":   "Opus 4.8",
+	"claude-opus-4-7":   "Opus 4.7",
+	"claude-opus-4-6":   "Opus 4.6",
+	"claude-sonnet-5":   "Sonnet 5",
+	"claude-sonnet-4-6": "Sonnet 4.6",
+	"claude-haiku-4-5":  "Haiku 4.5",
+}
+
 // modelLabel shortens long internal IDs to something readable in a small tile.
+// Unrecognised IDs fall through as-is so a new model shows up under its raw
+// name rather than being silently folded into another row.
 func modelLabel(m string) string {
 	if m == "" {
 		return "unknown"
 	}
-	switch {
-	case strings.HasPrefix(m, "claude-opus-4-8"):
-		return "Opus 4.8"
-	case strings.HasPrefix(m, "claude-opus-4-7"):
-		return "Opus 4.7"
-	case strings.HasPrefix(m, "claude-opus-4-6"):
-		return "Opus 4.6"
-	case strings.HasPrefix(m, "claude-sonnet-4-6"):
-		return "Sonnet 4.6"
-	case strings.HasPrefix(m, "claude-haiku-4-5"):
-		return "Haiku 4.5"
+	if label, ok := modelLabels[canonicalModel(m)]; ok {
+		return label
 	}
 	return m
 }
