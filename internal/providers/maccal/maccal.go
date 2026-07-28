@@ -44,9 +44,9 @@ func New(cals []string, lookahead, lookaheadDays int) *Provider {
 	}
 }
 
-func (p *Provider) Name() string             { return "Calendar" }
-func (p *Provider) Interval() time.Duration  { return 5 * time.Minute }
-func (p *Provider) PreferredWidth() int      { return 64 }
+func (p *Provider) Name() string            { return "Calendar" }
+func (p *Provider) Interval() time.Duration { return 5 * time.Minute }
+func (p *Provider) PreferredWidth() int     { return 64 }
 
 func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 	snap := providers.Snapshot{Name: p.Name(), Status: providers.StatusOK}
@@ -122,8 +122,9 @@ func fetchEvents(ctx context.Context, bin string, cals []string, days int) ([]pr
 	defer cancel()
 
 	args := []string{
-		"-nc",                                                 // no calendar header line
-		"-eep", "notes,attendees,url,uid,phone,description",   // suppress huge fields
+		"-nc",                                               // strip the " (calendar name)" suffix from titles
+		"-nrd",                                              // absolute dates only — see parseFragment
+		"-eep", "notes,attendees,url,uid,phone,description", // suppress huge fields
 		"-df", "%Y-%m-%d",
 		"-tf", "%H:%M",
 	}
@@ -143,19 +144,20 @@ func fetchEvents(ctx context.Context, bin string, cals []string, days int) ([]pr
 	return parseIcalBuddy(string(out)), nil
 }
 
-// parseIcalBuddy parses icalBuddy's default output, which looks like:
+// parseIcalBuddy parses icalBuddy's output under the flags fetchEvents
+// passes, which looks like:
 //
-//	• Web team standup (michael.pappas@safetyculture.io)
-//	    location: Sydney-2-MEET 2.05 (3) [Zoom]
-//	    today at 09:45 - 10:00
-//	• Sprint kick-off (michael.pappas@safetyculture.io)
-//	    location: ...
-//	    2026-06-02 at 10:00 - 11:00
+//   - Web team standup
+//     location: Sydney-2-MEET 2.05 (3) [Zoom]
+//     2026-06-01 at 09:45 - 10:00
+//   - Sprint kick-off
+//     location: ...
+//     2026-06-02 at 10:00 - 11:00
 //
 // Bullet character is `•` (U+2022). Property lines are indented and
 // either start with `<name>: <value>` or are the date/time line which
-// has no property name. The date can be a literal date (YYYY-MM-DD) or
-// the words "today" / "tomorrow".
+// has no property name. `-nc` means titles carry no " (calendar name)"
+// suffix, and `-nrd` means dates are always literal YYYY-MM-DD.
 func parseIcalBuddy(raw string) []providers.Event {
 	const bullet = "•"
 	seen := make(map[string]struct{})
@@ -192,9 +194,10 @@ func parseIcalBuddy(raw string) []providers.Event {
 // splitEventBlock extracts (title, datetime line, location) from one
 // bullet's worth of icalBuddy output.
 //
-// Title is the first non-empty line, with the trailing " (calendar)"
-// suffix stripped. Property lines are indented and use "name: value";
-// the date/time line has no name.
+// Title is the first non-empty line, taken verbatim — `-nc` already
+// removes the calendar-name suffix, and titles legitimately contain
+// parentheses (e.g. "Sprint showcase (+AI) & retro"). Property lines are
+// indented and use "name: value"; the date/time line has no name.
 func splitEventBlock(chunk string) (title, datetime, location string) {
 	sc := bufio.NewScanner(strings.NewReader(chunk))
 	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
@@ -206,7 +209,7 @@ func splitEventBlock(chunk string) (title, datetime, location string) {
 			continue
 		}
 		if first {
-			title = stripCalendarSuffix(trimmed)
+			title = trimmed
 			first = false
 			continue
 		}
@@ -256,17 +259,6 @@ func splitProperty(line string) (name, value string, ok bool) {
 	return "", "", false
 }
 
-func stripCalendarSuffix(s string) string {
-	// icalBuddy appends " (calendar name)" to each title. Strip the LAST
-	// parenthesised group only, since titles legitimately contain "(...)"
-	// (e.g. "Sprint showcase (+AI) & retro").
-	end := strings.LastIndex(s, "(")
-	if end < 1 || !strings.HasSuffix(s, ")") {
-		return s
-	}
-	return strings.TrimSpace(s[:end])
-}
-
 func looksLikeDateTime(s string) bool {
 	if strings.HasPrefix(strings.ToLower(s), "today") ||
 		strings.HasPrefix(strings.ToLower(s), "tomorrow") {
@@ -277,11 +269,10 @@ func looksLikeDateTime(s string) bool {
 
 // parseDateTime handles icalBuddy's date/time formats:
 //
-//	today at 09:45 - 10:00                    (today, timed)
-//	tomorrow at 14:00 - 15:00                 (tomorrow, timed)
 //	2026-06-04 at 12:30 - 13:00               (specific day)
 //	2026-06-04 at 12:30 - 2026-06-05 at 13:00 (multi-day)
 //	2026-06-04                                (all-day)
+//	2026-06-04 - 2026-06-08                   (all-day, multi-day)
 func parseDateTime(s string) (start, end time.Time, allDay bool) {
 	if s == "" {
 		return
@@ -293,20 +284,35 @@ func parseDateTime(s string) (start, end time.Time, allDay bool) {
 		start = parseFragment(left, time.Time{}, now)
 		end = parseFragment(right, start, now)
 		allDay = !strings.Contains(left, " at ")
-		return
+	} else {
+		start = parseFragment(strings.TrimSpace(s), time.Time{}, now)
+		allDay = !strings.Contains(s, " at ")
 	}
-	start = parseFragment(strings.TrimSpace(s), time.Time{}, now)
-	allDay = !strings.Contains(s, " at ")
+
+	// All-day events are bare dates, so both ends parse to midnight and
+	// icalBuddy's end date is the inclusive last day. Without stretching the
+	// end to end-of-day, filterUpcoming sees an event that "ended" at 00:00
+	// and drops today's all-day events five minutes into the morning.
+	if allDay && !start.IsZero() {
+		if end.IsZero() {
+			end = start
+		}
+		end = time.Date(end.Year(), end.Month(), end.Day(), 23, 59, 59, 0, time.Local)
+	}
 	return
 }
 
 // parseFragment turns one half of an icalBuddy date range into a local
 // time. Accepts:
 //
-//	"today at 09:45" / "tomorrow at 14:00"
 //	"2026-06-04 at 12:30"
 //	"2026-06-04"        (all-day)
 //	"12:30"             (bare time — borrowed date from base)
+//	"today at 09:45" / "tomorrow at 14:00"
+//
+// The relative forms are unreachable while fetchEvents passes -nrd, but are
+// kept so a build without that flag degrades to dropping the odd event
+// rather than every event more than two days out.
 func parseFragment(s string, base, now time.Time) time.Time {
 	low := strings.ToLower(s)
 	switch {
