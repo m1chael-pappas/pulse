@@ -30,7 +30,7 @@ echo 'export PATH="$HOME/go/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-To upgrade later, re-run the same `go install` command (or `git pull && make install` if you cloned).
+To upgrade later, re-run the same `go install` command (or `git pull && make install` if you cloned). See [CHANGELOG.md](./CHANGELOG.md) for what's changed.
 
 ## Development
 
