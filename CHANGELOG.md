@@ -9,6 +9,23 @@ today.
 
 ## [Unreleased]
 
+### Added
+
+- **AI usage tile.** The Claude tile is now an AI usage tile. It adds a
+  Copilot monthly spend bar and a "By model · 30d" list with tokens and spend
+  for each Claude and Copilot model. Copilot data comes from the `gh` CLI and
+  the Copilot CLI's local store.
+
+### Changed
+
+- **Review queue lists direct requests only.** The GitHub tile searches
+  `user-review-requested`, so PRs that ask a team you belong to no longer
+  show. The review queue now sits above your own PRs.
+- **Stat grid removed.** The "Today / 30d (API equiv.)" grid is gone. The
+  per-model list replaces it, and `b` now toggles the top projects only.
+- **Narrow tiles.** A quota row that does not fit on one line puts its label
+  on the first line and its value and reset time on the second.
+
 ### Fixed
 
 - **Calendar tile dropped most events.** icalBuddy prints relative dates

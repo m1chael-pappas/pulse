@@ -61,7 +61,7 @@ Keys inside the TUI: `tab` / `shift+tab` cycles focus, `r` refreshes, `q` quits.
 
 | Tile | Data source | Auth |
 |---|---|---|
-| **Claude** | `~/.claude/projects/*.jsonl` + `api.anthropic.com/api/oauth/usage` | macOS Keychain (Claude CLI) |
+| **AI usage** | Claude: `~/.claude/projects/*.jsonl` + `api.anthropic.com/api/oauth/usage`. Copilot: `~/.copilot/session-store.db` + `gh api /copilot_internal/user` | macOS Keychain (Claude CLI), `gh auth login` (Copilot) |
 | **System** | CPU / memory / disk / load via gopsutil | none |
 | **GitHub** | Open PRs (yours + review queue) via `gh` CLI | `gh auth login` |
 | **Calendar** | macOS Calendar.app via `icalBuddy` | macOS Calendar permission |
@@ -113,7 +113,7 @@ internal/
   ui/                       Bubble Tea root model + grid layout
     tile/                   shared tile renderer
   providers/                pluggable data feeds
-    claudecode/  claudestatus/  system/  github/  maccal/  gcal/
+    aiusage/  claudecode/  claudestatus/  system/  github/  maccal/  gcal/
   config/                   config.toml loader (~/.config/pulse/)
   doctor/                   pulse doctor health checks
 ```

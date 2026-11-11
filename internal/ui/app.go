@@ -11,6 +11,7 @@ import (
 
 	"github.com/m1chael-pappas/pulse/internal/config"
 	"github.com/m1chael-pappas/pulse/internal/providers"
+	"github.com/m1chael-pappas/pulse/internal/providers/aiusage"
 	"github.com/m1chael-pappas/pulse/internal/providers/claudecode"
 	"github.com/m1chael-pappas/pulse/internal/providers/claudestatus"
 	"github.com/m1chael-pappas/pulse/internal/providers/gcal"
@@ -36,7 +37,7 @@ func NewApp(cfg config.Config) App {
 		cfg.ClaudeCode.DailyBudget,
 		cfg.ClaudeCode.MonthBudget,
 	)
-	provs := []providers.Provider{cc, system.New()}
+	provs := []providers.Provider{aiusage.New(cc), system.New()}
 	if cfg.ClaudeStatus.IsEnabled() {
 		provs = append(provs, claudestatus.New())
 	}

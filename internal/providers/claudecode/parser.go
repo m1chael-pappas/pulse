@@ -35,23 +35,19 @@ type usagePayload struct {
 }
 
 type aggregate struct {
-	costToday         float64
-	costMonth         float64
-	cost30d           float64
-	tokensInputToday  int64
-	tokensOutputToday int64
-	tokensCacheToday  int64
-	tokens30d         int64
-	sessionStart      time.Time
-	sessionCost       float64
-	sessionCalls      int
-	sessions          map[string]struct{}
-	lastEvent         time.Time
-	lastPrompt        string
-	lastProject       string
-	costByModel       map[string]float64
-	costByProject     map[string]float64
-	costByDay         map[string]float64 // key = YYYY-MM-DD
+	costToday     float64
+	costMonth     float64
+	sessionStart  time.Time
+	sessionCost   float64
+	sessionCalls  int
+	sessions      map[string]struct{}
+	lastEvent     time.Time
+	lastPrompt    string
+	lastProject   string
+	costByModel   map[string]float64
+	tokensByModel map[string]int64
+	costByProject map[string]float64
+	costByDay     map[string]float64 // key = YYYY-MM-DD
 }
 
 func walk(root string, now time.Time) (aggregate, error) {
@@ -67,6 +63,7 @@ func walk(root string, now time.Time) (aggregate, error) {
 	a := aggregate{
 		sessions:      map[string]struct{}{},
 		costByModel:   map[string]float64{},
+		tokensByModel: map[string]int64{},
 		costByProject: map[string]float64{},
 		costByDay:     map[string]float64{},
 	}
@@ -86,13 +83,13 @@ func walk(root string, now time.Time) (aggregate, error) {
 		if info.ModTime().Before(earliest) {
 			return nil
 		}
-		processFile(path, &a, startDay, earliest, start30d, sessionCutoff)
+		processFile(path, &a, startDay, earliest, sessionCutoff)
 		return nil
 	})
 	return a, err
 }
 
-func processFile(path string, a *aggregate, startDay, earliest, start30d, sessionCutoff time.Time) {
+func processFile(path string, a *aggregate, startDay, earliest, sessionCutoff time.Time) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -138,24 +135,19 @@ func processFile(path string, a *aggregate, startDay, earliest, start30d, sessio
 			c := costFor(ll.Message.Model, u.InputTokens, u.OutputTokens, u.CacheCreationInputTokens, u.CacheReadInputTokens)
 			day := ts.Format("2006-01-02")
 			a.costByDay[day] += c
-			if !ts.Before(start30d) {
-				a.cost30d += c
-				a.tokens30d += u.InputTokens + u.OutputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
-			}
 			// Month bucket = current calendar month only.
 			monthStart := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, ts.Location())
 			if monthStart.Equal(time.Date(startDay.Year(), startDay.Month(), 1, 0, 0, 0, 0, startDay.Location())) {
 				a.costMonth += c
 			}
-			a.costByModel[modelLabel(ll.Message.Model)] += c
+			model := modelLabel(ll.Message.Model)
+			a.costByModel[model] += c
+			a.tokensByModel[model] += u.InputTokens + u.OutputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
 			if fileProject != "" {
 				a.costByProject[fileProject] += c
 			}
 			if !ts.Before(startDay) {
 				a.costToday += c
-				a.tokensInputToday += u.InputTokens
-				a.tokensOutputToday += u.OutputTokens
-				a.tokensCacheToday += u.CacheCreationInputTokens + u.CacheReadInputTokens
 			}
 			if !ts.Before(sessionCutoff) {
 				a.sessionCost += c

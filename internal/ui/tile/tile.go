@@ -97,7 +97,7 @@ func buildLines(snap providers.Snapshot, inner int) []string {
 			lines = append(lines, histogram(snap.History, inner))
 		}
 		if len(snap.Breakdown) > 0 {
-			lines = append(lines, "", labelStyle.Render("Where it came from (API equiv.)"))
+			lines = append(lines, "", labelStyle.Render("Top projects (API equiv.)"))
 			for _, b := range snap.Breakdown {
 				lines = append(lines, breakdownLine(b, inner))
 			}
@@ -141,17 +141,24 @@ func windowLines(w providers.Window, inner int) []string {
 	value := valueStyle.Render(formatValue(w.Unit, w.Used))
 	right := resetStyle.Render(countdown(w.ResetsAt))
 
-	first := label + "  " + value
 	if w.Limit > 0 && w.Unit != providers.UnitPercent {
-		first += labelStyle.Render(fmt.Sprintf(" / %s", formatValue(w.Unit, w.Limit)))
+		value += labelStyle.Render(fmt.Sprintf(" / %s", formatValue(w.Unit, w.Limit)))
 	}
-	gap := inner - lipgloss.Width(first) - lipgloss.Width(right)
+	bar := renderBar(w, inner)
+	if first := label + "  " + value; lipgloss.Width(first)+1+lipgloss.Width(right) <= inner {
+		return []string{spread(first, right, inner), bar}
+	}
+	return []string{clip(w.Label, inner), spread(value, right, inner), bar}
+}
+
+// spread returns left and right separated by the padding that makes the
+// line inner columns wide, with a minimum of one space.
+func spread(left, right string, inner int) string {
+	gap := inner - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
 	}
-	header := first + strings.Repeat(" ", gap) + right
-	bar := renderBar(w, inner)
-	return []string{header, bar}
+	return left + strings.Repeat(" ", gap) + right
 }
 
 func formatValue(u providers.Unit, v float64) string {
@@ -292,6 +299,9 @@ func eventRow(e providers.Event, inner int) string {
 
 func breakdownLine(b providers.BreakdownEntry, inner int) string {
 	val := formatValue(b.Unit, b.Value)
+	if b.DetailUnit != "" {
+		val = labelStyle.Render(fmt.Sprintf("%6s", formatValue(b.DetailUnit, b.Detail))) + fmt.Sprintf(" %9s", val)
+	}
 	// Reserve room for value + separator. If a glyph is present it eats
 	// 2 cols (glyph + trailing space) of the label budget — pre-colored
 	// and emitted verbatim so the green/red ANSI survives.

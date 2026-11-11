@@ -53,12 +53,17 @@ type Window struct {
 // Glyph is an optional pre-styled (already ANSI-colored) prefix character
 // like a green ✓ or red ✗. The tile renders it untouched so its color
 // survives the dim styling applied to the label proper.
+//
+// Detail is an optional second figure rendered left of Value, such as a
+// token count beside a cost. The tile renders it when DetailUnit is set.
 type BreakdownEntry struct {
-	Glyph string
-	Label string
-	Value float64
-	Unit  Unit
-	URL   string
+	Glyph      string
+	Label      string
+	Value      float64
+	Unit       Unit
+	Detail     float64
+	DetailUnit Unit
+	URL        string
 }
 
 // HistoryPoint is one data point in a time-series (e.g. cost per day).

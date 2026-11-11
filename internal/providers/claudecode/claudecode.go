@@ -181,9 +181,9 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 		Header:    header,
 		CostUSD:   agg.costToday,
 		Windows:   windows,
+		Sections:  buildModelSections(agg),
 		Breakdown: buildBreakdown(agg),
 		History:   buildHistory(agg, now),
-		Stats:     buildStats(agg),
 		Note:      note,
 	}
 }
@@ -367,15 +367,6 @@ func statusFromOAuthErr(err error) providers.Status {
 	}
 }
 
-func buildStats(agg aggregate) []providers.BreakdownEntry {
-	return []providers.BreakdownEntry{
-		{Label: "Today (API equiv.)", Value: agg.costToday, Unit: providers.UnitUSD},
-		{Label: "30d (API equiv.)", Value: agg.cost30d, Unit: providers.UnitUSD},
-		{Label: "30d tokens", Value: float64(agg.tokens30d), Unit: providers.UnitTokens},
-		{Label: "Today tokens", Value: float64(agg.tokensInputToday + agg.tokensOutputToday + agg.tokensCacheToday), Unit: providers.UnitTokens},
-	}
-}
-
 func buildHistory(agg aggregate, now time.Time) []providers.HistoryPoint {
 	points := make([]providers.HistoryPoint, 30)
 	startDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
@@ -387,19 +378,35 @@ func buildHistory(agg aggregate, now time.Time) []providers.HistoryPoint {
 	return points
 }
 
-// buildBreakdown returns the top per-model and per-project contributions,
-// answering "where did the cost come from?" Zero-cost entries (e.g. Claude
-// Code's "<synthetic>" tool-result echoes) are dropped — they're noise.
-func buildBreakdown(agg aggregate) []providers.BreakdownEntry {
-	var out []providers.BreakdownEntry
+// ModelsTitle is the title of the per-model usage section.
+const ModelsTitle = "By model · 30d"
 
-	models := sortedTop(agg.costByModel, 4)
-	for _, kv := range models {
+// buildModelSections returns one section with the top four models by
+// cost. Each row carries the token count in Detail and the API-equivalent
+// cost in Value. It returns nil when no model has a cost.
+func buildModelSections(agg aggregate) []providers.Section {
+	var rows []providers.BreakdownEntry
+	for _, kv := range sortedTop(agg.costByModel, 4) {
 		if kv.v <= 0 || kv.k == "<synthetic>" {
 			continue
 		}
-		out = append(out, providers.BreakdownEntry{Label: kv.k, Value: kv.v, Unit: providers.UnitUSD})
+		rows = append(rows, providers.BreakdownEntry{
+			Label:      kv.k,
+			Value:      kv.v,
+			Unit:       providers.UnitUSD,
+			Detail:     float64(agg.tokensByModel[kv.k]),
+			DetailUnit: providers.UnitTokens,
+		})
 	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return []providers.Section{{Title: ModelsTitle, Rows: rows}}
+}
+
+// buildBreakdown returns the top three projects by API-equivalent cost.
+func buildBreakdown(agg aggregate) []providers.BreakdownEntry {
+	var out []providers.BreakdownEntry
 
 	projects := sortedTop(agg.costByProject, 3)
 	for _, kv := range projects {
