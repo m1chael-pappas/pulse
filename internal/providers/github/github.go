@@ -92,10 +92,10 @@ func (p *Provider) Refresh(ctx context.Context) providers.Snapshot {
 		snap.Subtitle = "query failed: " + clipErr(err.Error())
 		return snap
 	}
-	if section := buildSection("Your PRs", authored, login); section != nil {
+	if section := buildSection("Review queue", review, login); section != nil {
 		snap.Sections = append(snap.Sections, *section)
 	}
-	if section := buildSection("Review queue", review, login); section != nil {
+	if section := buildSection("Your PRs", authored, login); section != nil {
 		snap.Sections = append(snap.Sections, *section)
 	}
 
@@ -211,7 +211,7 @@ func fetchPRs(ctx context.Context, login string, limit int, scope string) (autho
 	defer cancel()
 
 	authoredQuery := fmt.Sprintf("is:pr is:open author:%s archived:false%s", login, scope)
-	reviewQuery := fmt.Sprintf("is:pr is:open review-requested:%s archived:false%s", login, scope)
+	reviewQuery := fmt.Sprintf("is:pr is:open user-review-requested:%s archived:false%s", login, scope)
 
 	out, err := exec.CommandContext(cctx, "gh", "api", "graphql",
 		"-f", "query="+prsQuery,
