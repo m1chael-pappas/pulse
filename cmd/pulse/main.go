@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -53,8 +54,11 @@ func main() {
 		printFirstRunBanner(res.Path)
 	}
 
+	restore, _ := redirectStderr(filepath.Join(filepath.Dir(res.Path), "stderr.log"))
 	p := tea.NewProgram(ui.NewApp(res.Config), tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	_, err = p.Run()
+	restore()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "pulse: %v\n", err)
 		os.Exit(1)
 	}

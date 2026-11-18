@@ -55,6 +55,8 @@ First launch writes a default config to your OS config dir (`~/Library/Applicati
 pulse config          # prints the path
 ```
 
+On macOS, pulse writes stderr to `stderr.log` in the same directory while the TUI runs. Each start clears the file.
+
 Keys inside the TUI: `tab` / `shift+tab` cycles focus, `r` refreshes, `q` quits.
 
 ## What you get out of the box

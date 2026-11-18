@@ -28,6 +28,9 @@ today.
 
 ### Fixed
 
+- **Stray stderr text drew over the tiles.** On macOS, a warning from a
+  helper process could print on top of the dashboard. pulse now sends stderr
+  to `stderr.log` in the config directory while the TUI runs.
 - **Calendar tile dropped most events.** icalBuddy prints relative dates
   (`day after tomorrow at 10:30`) for the next few days, but the parser only
   understood `today`, `tomorrow`, and `YYYY-MM-DD`. Everything else failed to
